@@ -1,0 +1,42 @@
+[
+  {
+    "leaf": "MI_NHFurn_Bathtub_01e1f57c157e014608ec55718fed4d78ef9",
+    "template": "MI_Water_Common_Master_V07_SLW_Template_MATUSAGE_ENLit_GPUD_UUIWSI_1_UBW_1",
+    "config": {
+      "mode": "base-detail",
+      "detailWave02": [-0.5, -0.5, 600, 600],
+      "detailWave01": [0.5, -0.01, 600, 600],
+      "detailSpeed": 0.02,
+      "detailIntensity": [0.2, 0.1],
+      "distanceFade": [2184.1416, 0.0003551314938279567, 8995.371, 9.446182594520629e-5],
+      "normalFlatten": [0, 0, 0.217143],
+      "heightFade": [1549.5503, 0.0005991541022553538, 0, 0],
+      "horizon": [0, 0.3, 0.584],
+      "finalFlatten": 0,
+      "anisotropy": 0,
+      "base": {
+        "wave01": [-0.45, -0.5, 120, 60],
+        "wave02": [0.5, 0.5, 120, 60],
+        "speed": 0.008,
+        "intensity": [0.05, 0.05]
+      }
+    }
+  },
+  {
+    "leaf": "MI_NHFurn_Deco_10a5ddcea3bcea8d5c1a599ffcc6088078c",
+    "template": "MI_Water_Common_Master_V07_SLW_Template_MATUSAGE_ENLit_GPUD_UUIWSI_1",
+    "config": {
+      "mode": "detail",
+      "detailWave02": [-0.15, -0.1, 600, 600],
+      "detailWave01": [0.2, -0.01, 600, 600],
+      "detailSpeed": 0.02,
+      "detailIntensity": [0.25, 0.1],
+      "distanceFade": [423.27325, 0.0005681540076887715, 7604.328, 0.0003017417742174931],
+      "normalFlatten": [0.25, 0.5, 0.95],
+      "heightFade": [1549.5503, 0.0005991541022553538, 0, 0.25],
+      "horizon": [0.2, 0.05, 1],
+      "finalFlatten": 0,
+      "anisotropy": 0.5
+    }
+  }
+]

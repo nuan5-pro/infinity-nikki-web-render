@@ -1,0 +1,62 @@
+[
+  {
+    "key": "furniture_water_v7_default_true_false_false_false_false",
+    "vertex": "03e48a6c5f7b1dfb69893cdc8968b6f896fb14a713b21744194296fdd39bbd20",
+    "fragment": "90763738d046d771be2033045584fc9f749114fce72ed68efff00ca49d1f27b9"
+  },
+  {
+    "key": "furniture_water_v7_slw_true_false_false_false_false",
+    "vertex": "03e48a6c5f7b1dfb69893cdc8968b6f896fb14a713b21744194296fdd39bbd20",
+    "fragment": "a782dd4ce8f89bcd652c62dd7d9852fd5fe1aa3b417636274984ac9514353463"
+  },
+  {
+    "key": "furniture_water_v7_nature-pool_true_false_false_false_false",
+    "vertex": "03e48a6c5f7b1dfb69893cdc8968b6f896fb14a713b21744194296fdd39bbd20",
+    "fragment": "a782dd4ce8f89bcd652c62dd7d9852fd5fe1aa3b417636274984ac9514353463"
+  },
+  {
+    "key": "furniture_water_v7_slw-base-wave_true_false_false_false_false",
+    "vertex": "03e48a6c5f7b1dfb69893cdc8968b6f896fb14a713b21744194296fdd39bbd20",
+    "fragment": "c8c82092dc8551a946074f6cd20ed310ed7ee243af988ef7675a4bd698af6e3b"
+  },
+  {
+    "key": "furniture_water_common_v8_common-trans_true_false_false",
+    "vertex": "03e48a6c5f7b1dfb69893cdc8968b6f896fb14a713b21744194296fdd39bbd20",
+    "fragment": "7ecabac2cf022e435652671b1c6c6e18b87c4823a28de606aa51fd1f532f30b8"
+  },
+  {
+    "key": "furniture_water_v7_x6fx_true_false_false_false_false",
+    "vertex": "03e48a6c5f7b1dfb69893cdc8968b6f896fb14a713b21744194296fdd39bbd20",
+    "fragment": "0cc9a03afd91784ee868c2a4a9461810bd54cad6750488e3b76958f394a32d7d"
+  },
+  {
+    "key": "furniture_water_v7_glint_true_false_false_false_false",
+    "vertex": "03e48a6c5f7b1dfb69893cdc8968b6f896fb14a713b21744194296fdd39bbd20",
+    "fragment": "d5b6ed7d1bdfd994b3e4b92349434e0ee94018890c88054d22a62c6a390a7637"
+  },
+  {
+    "key": "furniture_water_v7_small-prop_true_false_false_false_false",
+    "vertex": "03e48a6c5f7b1dfb69893cdc8968b6f896fb14a713b21744194296fdd39bbd20",
+    "fragment": "26f41965c6c8ea995fecdf4c031636b15e4655e01af28e16ff0309ccb3fd74b3"
+  },
+  {
+    "key": "furniture_water_v7_special-trans_true_false_false_false_false",
+    "vertex": "03e48a6c5f7b1dfb69893cdc8968b6f896fb14a713b21744194296fdd39bbd20",
+    "fragment": "c13cfae813cc8d636736f909aa17c6aed2212038ed3885aef663b3e2fbb52c1b"
+  },
+  {
+    "key": "furniture_water_v7_flowing-liquid_true_false_false_false_false",
+    "vertex": "03e48a6c5f7b1dfb69893cdc8968b6f896fb14a713b21744194296fdd39bbd20",
+    "fragment": "3f0bd535b73b79b3339fb9140bade4d966963b60d8fd61404b41d8a7beb4e5ab"
+  },
+  {
+    "key": "furniture_water_slw_v2_slw_true_true",
+    "vertex": "092d9389e2a095e255cdf767f773d91e16cbd311c6609b9505a5f442838ae065",
+    "fragment": "fbd2844676830c1c6cac48923d9d9803b4ea058d32967c7ca3cacea06a212be4"
+  },
+  {
+    "key": "furniture_water_slw_v3_slw_true_true",
+    "vertex": "471cbcdc5496c96267e22f72531553cf9abee453c86413dd2d20de930a9995f5",
+    "fragment": "5d9edc4345472a01ec77eea04bb11eef0b4676e3d62c4f96ec77a76be1828590"
+  }
+]
