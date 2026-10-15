@@ -1,0 +1,39 @@
+{
+    "name": "@nuan5-pro/render",
+    "version": "0.1.0",
+    "type": "module",
+    "license": "MIT",
+    "files": [
+        "src",
+        "LICENSE"
+    ],
+    "exports": {
+        ".": {
+            "types": "./src/index.ts",
+            "import": "./src/index.ts"
+        },
+        "./furniture": {
+            "types": "./src/furniture/index.ts",
+            "import": "./src/furniture/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+        "test": "vitest run"
+    },
+    "peerDependencies": {
+        "three": ">=0.183.2 <0.184.0",
+        "three-mesh-bvh": ">=0.9.9 <0.10.0"
+    },
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "@stylistic/eslint-plugin": "^5.10.0",
+        "@types/three": "0.183.1",
+        "eslint": "^10.0.3",
+        "three": "0.183.2",
+        "three-mesh-bvh": "0.9.9",
+        "typescript": "5.9.3",
+        "typescript-eslint": "^8.57.1",
+        "vitest": "5.0.4"
+    }
+}
