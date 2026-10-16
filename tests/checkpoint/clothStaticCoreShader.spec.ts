@@ -117,6 +117,41 @@ function fixture(): FurnitureClothStaticCore {
 }
 
 describe('Cloth static active colour core', () => {
+	it('loads the native translucent glint branch without rainbow resources and releases its owned samplers', () => {
+		const p = fixture();
+		p.variant = 'translucent-glint';
+		p.cloth.mode = 'translucent';
+		p.cloth.alphaCutoff = 0;
+		for (const role of ['B', 'C', 'M']) delete p.textures[role];
+		for (const key of Object.keys(p.scalars)) if (key.startsWith('Rainbow_')) delete p.scalars[key];
+		delete p.colors['Rainbow_Color(A:EmissiveIntensity)'];
+		expect(readFurnitureClothStaticCore(p)).toBe(p);
+
+		const texture = new DataTexture(new Uint8Array([128, 128, 255, 128]), 1, 1);
+		const source = new MeshStandardMaterial();
+		const material = createClothStaticCoreMaterial(p, Object.fromEntries(Object.keys(p.textures).map((role) => [role, texture])), source);
+		const shader = { vertexShader: ShaderLib.standard.vertexShader, fragmentShader: ShaderLib.standard.fragmentShader, uniforms: {} } as Parameters<typeof material.onBeforeCompile>[0];
+		material.onBeforeCompile(shader, {} as WebGLRenderer);
+		expect(shader.fragmentShader).not.toContain('csRainbow');
+		expect(shader.fragmentShader).toContain('texture2D(csO1,csUV).r');
+		expect(shader.fragmentShader).toContain('clothShadowBase=csAlbedo+clothAniso;');
+		expect(shader.fragmentShader).toContain('clothD.a * mix(clothOpacity.x, clothOpacity.y');
+		expect(material.transparent).toBe(true);
+		expect(material.depthWrite).toBe(false);
+		expect(material.alphaTest).toBe(0);
+		expect(material.forceSinglePass).toBe(true);
+		expect(material.customProgramCacheKey()).toContain('translucent-glint');
+
+		let released = 0;
+		for (const role of ['D1', 'O1', 'T']) shader.uniforms[`cs${role}`]!.value.addEventListener('dispose', () => released++);
+		material.dispose();
+		expect(released).toBe(3);
+		texture.dispose();
+		source.dispose();
+		p.cloth.mode = 'masked';
+		expect(readFurnitureClothStaticCore(p)).toBeNull();
+	});
+
 	it('retains active HDR glints and rainbow RGB even when rainbow emission is zero', () => {
 		const p = fixture();
 		expect(readFurnitureClothStaticCore(p)).toBe(p);

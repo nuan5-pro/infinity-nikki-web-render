@@ -29,6 +29,7 @@ interface ClothColourTexture {
 export interface FurnitureClothStaticCore {
 	version: 1;
 	family: 'cloth-static-colour-core';
+	variant?: 'translucent-glint';
 	cloth: FurnitureCloth;
 	scalars: Record<string, number>;
 	colors: Record<string, [number, number, number, number]>;
@@ -66,25 +67,31 @@ const colorKeys = [
 
 const roles = ['D', 'N', 'O', 'N1', 'B', 'C', 'D1', 'O1', 'M', 'T'];
 const extraRoles = ['B', 'C', 'D1', 'O1', 'M', 'T'];
+const glintRoles = ['D', 'N', 'O', 'N1', 'D1', 'O1', 'T'];
+const glintExtraRoles = ['D1', 'O1', 'T'];
+const glintScalarKeys = scalarKeys.filter((key) => !key.startsWith('Rainbow_'));
+const glintColorKeys = colorKeys.filter((key) => !key.startsWith('Rainbow_'));
 const parameter = (key: string) => `cs${key.replace(/[^a-zA-Z0-9_]/g, '_')}`;
 
 export function readFurnitureClothStaticCore(value: unknown): FurnitureClothStaticCore | null {
 	if (!value || typeof value !== 'object') return null;
 
 	const p = value as FurnitureClothStaticCore;
+	const translucent = p.variant === 'translucent-glint';
 	if (
 		p.version !== 1 ||
 		p.family !== 'cloth-static-colour-core' ||
+		(p.variant !== undefined && !translucent) ||
 		!readFurnitureCloth(p.cloth) ||
 		p.cloth.mainUvChannel !== 0 ||
 		p.cloth.maskUvChannel !== 0 ||
 		p.cloth.fourthRole !== 'detail-normal' ||
-		p.cloth.mode !== 'masked' ||
+		p.cloth.mode !== (translucent ? 'translucent' : 'masked') ||
 		!p.scalars ||
 		!p.colors ||
 		!p.textures ||
-		scalarKeys.some((key) => !Number.isFinite(p.scalars[key])) ||
-		colorKeys.some(
+		(translucent ? glintScalarKeys : scalarKeys).some((key) => !Number.isFinite(p.scalars[key])) ||
+		(translucent ? glintColorKeys : colorKeys).some(
 			(key) =>
 				!Array.isArray(p.colors[key]) ||
 				p.colors[key]!.length !== 4 ||
@@ -92,7 +99,7 @@ export function readFurnitureClothStaticCore(value: unknown): FurnitureClothStat
 		)
 	) return null;
 
-	for (const role of roles) {
+	for (const role of translucent ? glintRoles : roles) {
 		const t = p.textures[role];
 		if (
 			!t ||
@@ -110,7 +117,7 @@ export function readFurnitureClothStaticCore(value: unknown): FurnitureClothStat
 	return p;
 }
 
-const colourCore = /* glsl */ `
+const rainbowCore = /* glsl */ `
 vec3 csReflected=reflect(-clothView,normal);
 vec3 csRight=cross(-clothView,vec3(0,1,0));
 csRight=dot(csRight,csRight)>.00000001?normalize(csRight):vec3(1,0,0);
@@ -119,6 +126,10 @@ vec2 csRainbowUV=(vec2(dot(csReflected,csRight),-dot(csReflected,csUp))*.5+.5)*c
 csRainbowUV+=texture2D(csB,vClothMainUV*(2.0*csRainbow_Warp_Tiling)/clothMainScale).rg*csRainbow_Warp;
 vec3 csRainbow=texture2D(csC,csRainbowUV).rgb*csRainbow_Color_A_EmissiveIntensity_.rgb;
 float csRainbowMask=texture2D(csM,vClothMainUV/clothMainScale).r;
+`;
+
+const colourCore = (translucent: boolean) => /* glsl */ `
+${translucent ? '' : rainbowCore}
 vec2 csUV=vClothMainUV/clothMainScale;
 vec2 csParallax=vec2(dot(tbn[0],clothView),dot(tbn[1],clothView))*csGlint_HeightRatio*(csGlint_TextureDepth-.5);
 vec2 csGlintUV=csUV*csGlint_TextureTiling+csParallax;
@@ -127,8 +138,8 @@ vec2 csGlintRG=texture2D(csD1,csGlintUV+csCameraNativeDirection.xy*csGlint_Shini
 vec2 csChannels=max(csGlintFirstRG*csGlintRG,vec2(0));
 vec3 csGlint=pow(csChannels.x,csGlint_Size1)*csGlint_Color1.rgb*csGlint_Color1.a
   +pow(csChannels.y,csGlint_Size2)*csGlint_Color2.rgb*csGlint_Color2.a;
-// Exact admitted source UseFixedGlintMask=0 samples its mask at zero UV.
-csGlint*=texture2D(csO1,vec2(0)).r;
+// These two compiled programs have different mask coordinate expressions.
+csGlint*=texture2D(csO1,${translucent ? 'csUV' : 'vec2(0)'}).r;
 vec3 csGlintMap=mix(mapN,vec3(0,0,1),csGlint_NormalFlatten);
 vec3 csGlintNormal=(tbn*csGlintMap)*faceDirection;
 vec3 csLight=vec3(0,0,1),csLightColor=vec3(.12);
@@ -145,7 +156,8 @@ csView=mix(csView,1.0-csView,csGlint_InverseViewRange);
 float csNormalWeight=1.0-pow(max(dot(mapN.xy,mapN.xy),0.0),csGlint_NormalWeight);
 csGlint*=csLightColor*csSpec*csView*csNormalWeight;
 vec3 csAlbedo=mix(diffuseColor.rgb,csCloth_MaskTintColor.rgb,texture2D(csT,vClothMaskUV).r);
-vec3 csSurface=mix(clothAniso+clothEdge,csRainbow,csRainbowMask*csRainbow_D_BlendWeight);
+vec3 csSurface=${translucent ? 'clothAniso+clothEdge' : 'mix(clothAniso+clothEdge,csRainbow,csRainbowMask*csRainbow_D_BlendWeight)'};
+${translucent ? 'clothShadowBase=csAlbedo+clothAniso;' : ''}
 diffuseColor.rgb=clamp(csAlbedo+csSurface+csGlint*csGlint_TotalBaseColorControl,0.0,1.0);
 `;
 
@@ -156,7 +168,9 @@ export function createClothStaticCoreMaterial(
 ) {
 	if (!readFurnitureClothStaticCore(profile)) throw new Error('[ClothStaticCore] invalid source profile');
 
-	for (const role of roles)
+	const translucent = profile.variant === 'translucent-glint';
+	const activeExtras = translucent ? glintExtraRoles : extraRoles;
+	for (const role of translucent ? glintRoles : roles)
 		if (!textures[role]) throw new Error(`[ClothStaticCore] missing active texture ${role}`);
 
 	const material = createClothMaterial(
@@ -179,7 +193,7 @@ export function createClothStaticCoreMaterial(
 				? MirroredRepeatWrapping
 				: RepeatWrapping;
 
-	for (const role of extraRoles) {
+	for (const role of activeExtras) {
 		const texture = textures[role];
 		const contract = profile.textures[role]!;
 		if (!texture) throw new Error(`[ClothStaticCore] missing active texture ${role}`);
@@ -217,23 +231,23 @@ export function createClothStaticCoreMaterial(
 
 	const compile = material.onBeforeCompile;
 	const cache = material.customProgramCacheKey();
-	material.customProgramCacheKey = () => `${cache}_static-active-glint-rainbow-1`;
+	material.customProgramCacheKey = () => `${cache}_static-active-${translucent ? 'translucent-glint' : 'glint-rainbow'}-1`;
 	material.onBeforeCompile = (shader, renderer) => {
 		compile.call(material, shader, renderer);
 
 		let uniforms = 'uniform float clothMainScale;\nuniform vec3 csCameraNativeDirection;\n';
 		shader.uniforms.csCameraNativeDirection = cameraDirection;
-		for (const key of scalarKeys) {
+		for (const key of translucent ? glintScalarKeys : scalarKeys) {
 			uniforms += `uniform float ${parameter(key)};\n`;
 			shader.uniforms[parameter(key)] = { value: profile.scalars[key] };
 		}
 
-		for (const key of colorKeys) {
+		for (const key of translucent ? glintColorKeys : colorKeys) {
 			uniforms += `uniform vec4 ${parameter(key)};\n`;
 			shader.uniforms[parameter(key)] = { value: new Vector4(...profile.colors[key]!) };
 		}
 
-		for (const role of extraRoles) {
+		for (const role of activeExtras) {
 			uniforms += `uniform sampler2D cs${role};\n`;
 			shader.uniforms[`cs${role}`] = { value: sampling[role] };
 		}
@@ -241,10 +255,10 @@ export function createClothStaticCoreMaterial(
 		shader.fragmentShader =
 			uniforms +
 			shader.fragmentShader
-				.replace('diffuseColor.rgb = clamp(clothShadowBase + clothEdge, 0.0, 1.0);', colourCore)
+				.replace('diffuseColor.rgb = clamp(clothShadowBase + clothEdge, 0.0, 1.0);', colourCore(translucent))
 				.replace(
 					'// Native edge/aniso emission alpha can be negative.',
-					`totalEmissiveRadiance += csRainbow*csRainbowMask*csRainbow_Color_A_EmissiveIntensity_.a+csGlint*csGlint_TotalEmissiveControl;
+					`totalEmissiveRadiance += ${translucent ? '' : 'csRainbow*csRainbowMask*csRainbow_Color_A_EmissiveIntensity_.a+'}csGlint*csGlint_TotalEmissiveControl;
 // Native edge/aniso emission alpha can be negative.`,
 				);
 	};

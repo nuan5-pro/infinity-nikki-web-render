@@ -59,7 +59,7 @@ describe('candidate preparation handoff', () => {
 			compile: vi.fn((object: InstancedMesh) => {
 				const material = object.material as MeshBasicMaterial;
 				properties.set(material, {
-					programs: new Map([['main', { program: {} }]]),
+					programs: new Map([['main', { program: {}, getUniforms: () => ({ seq: [] }) }]]),
 					uniforms: { map: { value: material.map } },
 				});
 			}),
@@ -72,6 +72,7 @@ describe('candidate preparation handoff', () => {
 			const map = new Texture({ width: 2048, height: 1024 });
 			return new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ map }), 1);
 		});
+		scene.add(...meshes);
 		const results = meshes.map((mesh) => preparation.prepare(mesh, () => false));
 		try {
 			for (let frame = 0; frame < 6 && frames.size; frame++) {
@@ -94,6 +95,18 @@ describe('candidate preparation handoff', () => {
 			expect(await Promise.all(results)).toEqual([true, true, true]);
 			expect(renderer.compile).toHaveBeenCalledTimes(3);
 			expect(renderer.compileAsync).toHaveBeenCalledTimes(3);
+			expect(renderer.initTexture).toHaveBeenCalledTimes(3);
+			const scans = scan.mock.calls.length;
+			const progress = vi.fn();
+			const sceneReady = preparation.prepareScene(() => false, progress);
+			// One discovery traversal, not one full-scene readiness scan per batch.
+			expect(scan.mock.calls.length - scans).toBe(1);
+			const callbacks = [...frames.values()];
+			frames.clear();
+			callbacks[0]!(100);
+			expect(await sceneReady).toBe(true);
+			expect(progress.mock.calls).toEqual([[0, 3], [1, 3], [2, 3], [3, 3]]);
+			expect(renderer.compile).toHaveBeenCalledTimes(3);
 			expect(renderer.initTexture).toHaveBeenCalledTimes(3);
 			expect(frames.size).toBe(0);
 			expect(await preparation.prepare(meshes[0]!, () => false)).toBe(true);

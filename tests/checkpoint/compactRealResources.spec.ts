@@ -23,6 +23,7 @@ import { readNNClothPreview } from '../../src/materials/nncloth/nnclothPreview.j
 import { readFurnitureSurface } from '../../src/materials/surface/surfaceShader.js';
 import { readFurnitureGlass } from '../../src/materials/glass/glassShader.js';
 import { readFurnitureCloth } from '../../src/materials/cloth/clothShader.js';
+import { readFurnitureClothStaticCore } from '../../src/materials/cloth/clothStaticCoreShader.js';
 import { readFurnitureLayered } from '../../src/materials/layered/layeredShader.js';
 import { readFurnitureJewel } from '../../src/materials/jewel/jewelShader.js';
 import { readFurnitureScene } from '../../src/materials/sceneShader.js';
@@ -91,6 +92,7 @@ describe.skipIf(!catalog)('actual compact producer resources', () => {
 			surface: readFurnitureSurface,
 			glass: readFurnitureGlass,
 			cloth: readFurnitureCloth,
+			clothStaticCore: readFurnitureClothStaticCore,
 			layered: readFurnitureLayered,
 			jewel: readFurnitureJewel,
 			scene: readFurnitureScene,
@@ -105,20 +107,22 @@ describe.skipIf(!catalog)('actual compact producer resources', () => {
 		const models = new Set<string>();
 		for (const item of decoded)
 			for (const mesh of item.meshes) {
-				if (models.has(mesh.models.full.path)) continue;
-				models.add(mesh.models.full.path);
+				for (const model of [mesh.models.full, mesh.models.lite]) {
+					if (!model || models.has(model.path)) continue;
+					models.add(model.path);
 
-				const bytes = await fetchFurnitureAsset(mesh.models.full, new AbortController().signal, '/assets/furniture-v2/');
-				const view = new DataView(bytes);
-				expect(view.getUint32(0, true)).toBe(0x46546c67);
+					const bytes = await fetchFurnitureAsset(model, new AbortController().signal, '/assets/furniture-v2/');
+					const view = new DataView(bytes);
+					expect(view.getUint32(0, true)).toBe(0x46546c67);
 
-				const json = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 20, view.getUint32(12, true))));
-				expect(json.extras.furnitureV2).toEqual({ kind: 'model', version: 2 });
-				expect(json.images).toBeUndefined();
-				expect(json.materials).toHaveLength(mesh.slots.length);
-				for (let slot = 0; slot < mesh.slots.length; slot++) {
-					expect(json.materials[slot].extras.furnitureV2.slot).toBe(`m${slot}`);
-					expect(json.materials[slot].name).toBe(catalog!.materials[mesh.slots[slot]!]!.name);
+					const json = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 20, view.getUint32(12, true))));
+					expect(json.extras.furnitureV2).toEqual({ kind: 'model', version: 2 });
+					expect(json.images).toBeUndefined();
+					expect(json.materials).toHaveLength(mesh.slots.length);
+					for (let slot = 0; slot < mesh.slots.length; slot++) {
+						expect(json.materials[slot].extras.furnitureV2.slot).toBe(`m${slot}`);
+						expect(json.materials[slot].name).toBe(catalog!.materials[mesh.slots[slot]!]!.name);
+					}
 				}
 			}
 

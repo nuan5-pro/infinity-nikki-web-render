@@ -59,7 +59,7 @@ function setup(options: Partial<GpuPreparationOptions> = {}) {
 		compile: vi.fn((object: Mesh) => {
 			const value = object.material as MeshBasicMaterial;
 			const state = get(value);
-			const program = { program: {} };
+			const program = { program: {}, getUniforms: () => ({ seq: [] }) };
 			state.programs.set('program', program);
 			state.currentProgram = program;
 			state.uniforms = { map: { value: value.map } };
@@ -93,6 +93,45 @@ function setup(options: Partial<GpuPreparationOptions> = {}) {
 }
 
 describe('bounded renderer-owned GPU preparation', () => {
+	it('retains completed lighting/shadow variants and texture uploads across scene state changes', async () => {
+		const state = setup();
+		const { gpu, scene, camera, renderer, mesh, material } = state;
+		material.map = new Texture();
+		state.complete();
+		for (const enabled of [false, true]) {
+			renderer.shadowMap.enabled = enabled;
+			gpu.beginFrame(scene, camera);
+			expect(gpu.ensure(mesh, material, scene, camera)).toBe(false);
+			gpu.beginFrame(scene, camera);
+			await Promise.resolve();
+			expect(gpu.ensure(mesh, material, scene, camera)).toBe(true);
+		}
+		for (const enabled of [false, true, false]) {
+			renderer.shadowMap.enabled = enabled;
+			gpu.beginFrame(scene, camera);
+			expect(gpu.areReady(mesh, [material], scene, camera)).toBe(true);
+			expect(gpu.ensure(mesh, material, scene, camera)).toBe(true);
+		}
+		expect(renderer.compile).toHaveBeenCalledTimes(2);
+		expect(renderer.initTexture).toHaveBeenCalledTimes(1);
+		expect(gpu.getStats().resets).toBe(1);
+		gpu.dispose();
+	});
+
+	it('does not reuse a completed job after replacing the compile callback under the same key', async () => {
+		const state = setup();
+		const { gpu, scene, camera, renderer, mesh, material } = state;
+		material.customProgramCacheKey = () => 'stable';
+		state.complete();
+		gpu.beginFrame(scene, camera);
+		gpu.ensure(mesh, material, scene, camera);
+		gpu.beginFrame(scene, camera);
+		await Promise.resolve();
+		material.onBeforeCompile = () => {};
+		expect(gpu.ensure(mesh, material, scene, camera)).toBe(false);
+		expect(renderer.compile).toHaveBeenCalledTimes(2);
+		gpu.dispose();
+	});
 	it.each([
 		'texture',
 		'source',

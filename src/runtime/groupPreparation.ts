@@ -1,7 +1,7 @@
-import type { Camera, InstancedMesh, Material, Scene, WebGLRenderer } from 'three';
+import type { Camera, Material, Mesh, Scene, WebGLRenderer } from 'three';
 import { createGpuPreparation } from './gpuPreparation.js';
 
-type Prepare = (mesh: InstancedMesh, stale: () => boolean) => Promise<boolean>;
+type Prepare = (mesh: Mesh, stale: () => boolean) => Promise<boolean>;
 
 export function createGroupPreparation(
 	renderer: WebGLRenderer,
@@ -18,39 +18,47 @@ export function createGroupPreparation(
 	});
 
 	type Candidate = {
-		mesh: InstancedMesh;
+		mesh: Mesh;
 		materials: Material[];
 		stale: () => boolean;
 		resolve: (ready: boolean) => void;
 		reject: (error: unknown) => void;
 	};
 
-	const pending: Candidate[] = [];
+	const pending = new Set<Candidate>();
+	const users = new Map<Material, number>();
 	let disposed = false;
 	let frame: number | undefined;
 
 	function finish(candidate: Candidate, ready: boolean, error?: unknown) {
-		const index = pending.indexOf(candidate);
-		if (index >= 0) pending.splice(index, 1);
-		if (!ready)
-			for (const material of candidate.materials) {
-				if (!pending.some((other) => other.materials.includes(material)))
-					queue.cancelMaterial(material);
+		if (!pending.delete(candidate)) return;
+		for (const material of candidate.materials) {
+			const count = users.get(material)! - 1;
+			if (count) users.set(material, count);
+			else {
+				users.delete(material);
+				if (!ready) queue.cancelMaterial(material);
 			}
+		}
 
 		if (error !== undefined) candidate.reject(error);
 		else candidate.resolve(ready);
 	}
 
 	function schedule() {
-		if (!disposed && pending.length && frame === undefined) frame = requestAnimationFrame(tick);
+		if (!disposed && pending.size && frame === undefined) frame = requestAnimationFrame(tick);
+	}
+
+	function enqueue(candidate: Candidate) {
+		pending.add(candidate);
+		for (const material of candidate.materials) users.set(material, (users.get(material) ?? 0) + 1);
 	}
 
 	function tick() {
 		frame = undefined;
 		for (const candidate of [...pending]) if (candidate.stale()) finish(candidate, false);
 
-		if (disposed || !pending.length) return;
+		if (disposed || !pending.size) return;
 
 		const target = renderer.getRenderTarget();
 		try {
@@ -65,15 +73,24 @@ export function createGroupPreparation(
 
 			renderer.setRenderTarget(null);
 			// One budget reset, completion/upload drain and light scan per canvas frame.
+			const start = performance.now();
 			queue.beginFrame(scene, camera);
 			for (const candidate of [...pending]) {
+				if (performance.now() - start >= 3) break;
 				try {
 					let ready = true;
 					for (const material of candidate.materials) {
-						if (!queue.ensure(candidate.mesh, material, scene, camera)) ready = false;
+						if (!queue.ensure(candidate.mesh, material, scene, camera)) {
+							ready = false;
+							break;
+						}
 					}
 
-					if (!ready) continue;
+					if (!ready) {
+						pending.delete(candidate);
+						pending.add(candidate);
+						continue;
+					}
 					renderer.shadowMap.needsUpdate = true;
 					finish(candidate, true);
 					invalidate();
@@ -81,8 +98,6 @@ export function createGroupPreparation(
 					finish(candidate, false, error);
 				}
 			}
-			// Rotate the starting group so a large candidate cannot monopolize submissions.
-			if (pending.length > 1) pending.push(pending.shift()!);
 		} catch (error) {
 			for (const candidate of [...pending]) finish(candidate, false, error);
 		} finally {
@@ -112,12 +127,36 @@ export function createGroupPreparation(
 				return;
 			}
 
-			pending.push({ mesh, materials, stale, resolve, reject });
+			enqueue({ mesh, materials, stale, resolve, reject });
 			schedule();
 		});
 
 	return {
 		prepare,
+
+		async prepareScene(stale: () => boolean, onProgress?: (completed: number, total: number) => void) {
+			const { scene, camera } = context();
+			if (disposed || !camera || stale()) return false;
+			const meshes: Mesh[] = [];
+			scene.traverseVisible((object) => {
+				const mesh = object as Mesh;
+				if (mesh.isMesh && camera.layers.test(mesh.layers)) meshes.push(mesh);
+			});
+			let completed = 0;
+			onProgress?.(completed, meshes.length);
+			// Enqueue in one pass. Calling prepare() per mesh would rescan the whole
+			// scene for every cached-readiness check before yielding to the browser.
+			const results = await Promise.all(meshes.map((mesh) => new Promise<boolean>((resolve, reject) => {
+				if (disposed || stale()) { resolve(false); return; }
+				enqueue({ mesh, stale, materials: Array.isArray(mesh.material) ? mesh.material : [mesh.material],
+					resolve: (ready) => {
+						if (ready && !stale()) onProgress?.(++completed, meshes.length);
+						resolve(ready);
+					}, reject });
+				schedule();
+			})));
+			return !stale() && results.every(Boolean);
+		},
 
 		dispose() {
 			disposed = true;
