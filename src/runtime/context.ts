@@ -2,6 +2,7 @@ import type { Camera, IUniform, Scene, WebGLRenderer } from 'three';
 import { createGroupPreparation } from './groupPreparation.js';
 import { prepareUniformArrayCache } from './uniformArrayCache.js';
 import { createShadowUpdates } from './shadowUpdates.js';
+import { prepareShadowPrograms } from './shadowPreparation.js';
 import { installNNClothRendererContext } from '../materials/nncloth/nnclothRendererContext.js';
 import { installParallaxCardPreviewContext } from '../materials/effects/parallaxCardPreview.js';
 import { installCharacterJewelPreviewContext } from '../materials/jewel/characterJewelPreview.js';
@@ -61,6 +62,24 @@ export function createRenderContext(options: RenderContextOptions) {
 		get disposed() { return disposed; },
 
 		prepare: preparation.prepare,
+		async prepareScene(
+			stale: () => boolean,
+			onProgress?: (completed: number, total: number, phase: 'shaders' | 'shadows') => void,
+		) {
+			const shadows = renderer.shadowMap.enabled;
+			let total = 0;
+			const ready = await preparation.prepareScene(stale, (completed, count) => {
+				total = count;
+				onProgress?.(completed, count + (shadows ? 1 : 0), 'shaders');
+			});
+			if (!ready || !shadows) return ready;
+			const camera = options.getCamera();
+			if (!camera || stale()) return false;
+			onProgress?.(total, total + 1, 'shadows');
+			if (!await prepareShadowPrograms(renderer, scene, camera, stale)) return false;
+			onProgress?.(total + 1, total + 1, 'shadows');
+			return true;
+		},
 		invalidate: options.invalidate,
 
 		onBeforeRender(callback: () => void) {

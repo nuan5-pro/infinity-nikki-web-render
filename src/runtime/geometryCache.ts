@@ -1,20 +1,32 @@
 import { Box3, Vector3, type BufferGeometry } from 'three';
 
+/** Write revisions without truncating a reusable buffer's allocated storage. */
+export function writeGeometryRevision(geometry: BufferGeometry, target: unknown[], offset: number): number {
+	target[offset++] = geometry.index;
+	target[offset++] = geometry.index?.version;
+	target[offset++] = geometry.drawRange.start;
+	target[offset++] = geometry.drawRange.count;
+	for (const name in geometry.attributes) {
+		const attribute = geometry.attributes[name]!;
+		target[offset++] = name;
+		target[offset++] = attribute;
+		target[offset++] = 'version' in attribute ? attribute.version : attribute.data.version;
+		target[offset++] = attribute.count;
+	}
+	for (const group of geometry.groups) {
+		target[offset++] = group.start;
+		target[offset++] = group.count;
+		target[offset++] = group.materialIndex;
+	}
+
+	return offset;
+}
+
 /** Track local geometry through attribute identity and upload versions. */
 export function geometryRevision(geometry: BufferGeometry): unknown[] {
-	return [
-		geometry.index,
-		geometry.index?.version,
-		geometry.drawRange.start,
-		geometry.drawRange.count,
-		...Object.entries(geometry.attributes).flatMap(([name, attribute]) => [
-			name,
-			attribute,
-			'version' in attribute ? attribute.version : attribute.data.version,
-			attribute.count,
-		]),
-		...geometry.groups.flatMap((group) => [group.start, group.count, group.materialIndex]),
-	];
+	const revision: unknown[] = [];
+	writeGeometryRevision(geometry, revision, 0);
+	return revision;
 }
 
 export function sameGeometryRevision(a: unknown[], b: unknown[]) {

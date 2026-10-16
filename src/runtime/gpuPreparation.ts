@@ -15,7 +15,7 @@ import {
 
 type Renderable = Object3D & { material?: Material | Material[]; geometry?: Mesh['geometry'] };
 
-type Program = { program: WebGLProgram };
+type Program = { program: WebGLProgram; getUniforms(): unknown };
 
 type Job = {
 	material: Material
@@ -104,6 +104,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 	const releases = new Map<Material, () => void>();
 	const uploads = new WeakMap<Texture, { generation: number; version: number }>();
 	const textureReleases = new Map<Texture, () => void>();
+	const readyPrograms = new WeakSet<WebGLProgram>();
 
 	const pending = new Set<Job>();
 	const compiling = new Set<Material>();
@@ -219,6 +220,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 	function jobKey(object: Renderable, material: Material) {
 		const target = renderer.getRenderTarget();
 		return JSON.stringify([
+			sceneState,
 			materialKey(material),
 			!!target,
 			target?.texture.colorSpace,
@@ -270,10 +272,16 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 		spent = submissions = uploaded = bytes = 0;
 
 		const state = getSceneState(scene, camera);
-		if (owner !== sceneOwner || state !== sceneState) {
+		if (owner !== sceneOwner) {
 			owner = sceneOwner;
-			sceneState = state;
 			reset();
+		}
+		if (state !== sceneState) {
+			// Programs/textures remain owned by this renderer across lighting and
+			// shadow variants. Retire only in-flight work; completed variants stay hot.
+			for (const variants of records.values())
+				for (const job of variants.values()) if (!job.ready) cancel(job);
+			sceneState = state;
 		}
 
 		if (disposed || lost) return;
@@ -293,13 +301,22 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 			}
 			// Unlike Three's timer-based poll, these captured handles never outlive
 			// disposal/context invalidation or look up a removed material property.
-			if (
-				extension &&
-				job.programs.some((program) => !gl.getProgramParameter(program.program, extension.COMPLETION_STATUS_KHR))
-			)
-				continue;
-
-			const failed = measured('compileCpuMs', () => job.programs.find((program) => !gl.getProgramParameter(program.program, gl.LINK_STATUS)));
+			let complete = true;
+			let failed: Program | undefined;
+			for (const program of job.programs) {
+				if (readyPrograms.has(program.program)) continue;
+				if (!budget() || (extension && !measured('compileCpuMs', () =>
+					gl.getProgramParameter(program.program, extension.COMPLETION_STATUS_KHR)))) {
+					complete = false;
+					break;
+				}
+				if (!measured('compileCpuMs', () => gl.getProgramParameter(program.program, gl.LINK_STATUS))) {
+					failed = program;
+					break;
+				}
+				measured('compileCpuMs', () => program.getUniforms());
+				readyPrograms.add(program.program);
+			}
 			if (failed) {
 				job.failed = true;
 				stats.errors++;
@@ -307,8 +324,8 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 				cancel(job);
 				continue;
 			}
+			if (!complete) continue;
 
-			let complete = true;
 			for (const texture of job.textures) {
 				watchTexture(texture);
 
@@ -336,8 +353,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 			pending.delete(job);
 			// All programs are now complete. compileAsync performs the renderer's
 			// normal readiness check without leaving uncancellable polling timers.
-			job
-				.commit()
+			measured('compileCpuMs', () => job.commit())
 				.then(() => {
 					compiling.delete(job.material);
 					if (
@@ -393,6 +409,8 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 
 		const previous = variants.get(key);
 		if (previous?.failed) throw new Error(`GPU preparation failed for ${material.name || material.type}`);
+		if (previous && (previous.compile !== material.onBeforeCompile || previous.sourceKey !== material.customProgramCacheKey()))
+			cancel(previous);
 
 		if (previous && !previous.cancelled) {
 			if (!previous.ready) return false;
