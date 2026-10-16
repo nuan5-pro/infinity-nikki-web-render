@@ -136,7 +136,7 @@ export function createTranslucentCrystalPreviewMaterial(
 	const light = directionalLight(scene, options.light);
 	const shadowType = renderer.shadowMap.type;
 	if (shadowType !== BasicShadowMap && shadowType !== PCFShadowMap && shadowType !== VSMShadowMap) throw new Error('[ModelManager][Crystal] unreviewed renderer shadow type');
-	if (!renderer.shadowMap.enabled) throw new Error('[ModelManager][Crystal] actual renderer shadows must be enabled');
+	const shadowsEnabled = renderer.shadowMap.enabled;
 
 	const position = new Vector3();
 	const target = new Vector3();
@@ -191,11 +191,12 @@ export function createTranslucentCrystalPreviewMaterial(
 
 	const shadow: TranslucentCrystalPreviewShadow = {
 		kind: 'editor-directional-shadow',
-		programKey: `editor-shadow-${shadowType}-${reversed}`,
+		programKey: `editor-shadow-${shadowType}-${reversed}-${shadowsEnabled}`,
 		uniforms,
-		vertexDeclarations:
-			'uniform mat4 crystalPreviewShadowMatrix;\nuniform float crystalPreviewNormalBias;\nvarying vec4 vCrystalPreviewShadowCoord;\n',
-		vertexBody: /* glsl */ `
+		vertexDeclarations: shadowsEnabled
+			? 'uniform mat4 crystalPreviewShadowMatrix;\nuniform float crystalPreviewNormalBias;\nvarying vec4 vCrystalPreviewShadowCoord;\n'
+			: '',
+		vertexBody: shadowsEnabled ? /* glsl */ `
 vec4 crystalPreviewWorld=vec4(transformed,1.0);
 #ifdef USE_INSTANCING
 crystalPreviewWorld=instanceMatrix*crystalPreviewWorld;
@@ -203,8 +204,8 @@ crystalPreviewWorld=instanceMatrix*crystalPreviewWorld;
 crystalPreviewWorld=modelMatrix*crystalPreviewWorld;
 vec3 crystalPreviewWorldNormal=inverseTransformDirection(transformedNormal,viewMatrix);
 vCrystalPreviewShadowCoord=crystalPreviewShadowMatrix*(crystalPreviewWorld+vec4(crystalPreviewWorldNormal*crystalPreviewNormalBias,0.0));
-`,
-		fragment: [
+` : '',
+		fragment: shadowsEnabled ? [
 			defines,
 			'varying vec4 vCrystalPreviewShadowCoord;',
 			`uniform ${shadowType === PCFShadowMap ? 'sampler2DShadow' : 'sampler2D'} crystalPreviewShadowMap;`,
@@ -214,7 +215,7 @@ vCrystalPreviewShadowCoord=crystalPreviewShadowMatrix*(crystalPreviewWorld+vec4(
 			'float crystalPreviewShadow() {',
 			'return crystalPreviewGetShadow(crystalPreviewShadowMap,crystalPreviewShadowSize,crystalPreviewShadowIntensity,crystalPreviewShadowBias,crystalPreviewShadowRadius,vCrystalPreviewShadowCoord);',
 			'}',
-		].join('\n'),
+		].join('\n') : 'float crystalPreviewShadow() { return 1.0; }',
 
 		update(currentRenderer, currentScene, _camera, object) {
 			if (
@@ -222,7 +223,7 @@ vCrystalPreviewShadowCoord=crystalPreviewShadowMatrix*(crystalPreviewWorld+vec4(
 				currentScene !== scene ||
 				renderer.shadowMap.type !== shadowType ||
 				renderer.capabilities.reversedDepthBuffer !== reversed ||
-				!renderer.shadowMap.enabled ||
+				renderer.shadowMap.enabled !== shadowsEnabled ||
 				directionalLight(scene, light) !== light
 			) throw new Error('[ModelManager][Crystal] preview renderer/scene/shadow contract changed');
 			// This custom source core samples its own renderer map. The stock Three
@@ -231,20 +232,22 @@ vCrystalPreviewShadowCoord=crystalPreviewShadowMatrix*(crystalPreviewWorld+vec4(
 
 			const map = light.shadow.map;
 			const texture = map?.texture.format === RGFormat ? map.texture : (map?.depthTexture ?? map?.texture);
-			if (
+			if (shadowsEnabled && (
 				!map ||
 				!texture ||
 				(shadowType === PCFShadowMap &&
 					(!map.depthTexture || map.depthTexture.compareFunction === null))
-			) throw new Error('[ModelManager][Crystal] actual generated renderer shadow texture required');
+			)) throw new Error('[ModelManager][Crystal] actual generated renderer shadow texture required');
 
-			uniforms.crystalPreviewShadowMap.value = texture;
-			uniforms.crystalPreviewShadowMatrix.value.copy(light.shadow.matrix);
-			uniforms.crystalPreviewShadowSize.value.set(map.width, map.height);
-			uniforms.crystalPreviewShadowBias.value = light.shadow.bias;
-			uniforms.crystalPreviewNormalBias.value = light.shadow.normalBias;
-			uniforms.crystalPreviewShadowRadius.value = light.shadow.radius;
-			uniforms.crystalPreviewShadowIntensity.value = light.shadow.intensity;
+			if (shadowsEnabled) {
+				uniforms.crystalPreviewShadowMap.value = texture!;
+				uniforms.crystalPreviewShadowMatrix.value.copy(light.shadow.matrix);
+				uniforms.crystalPreviewShadowSize.value.set(map!.width, map!.height);
+				uniforms.crystalPreviewShadowBias.value = light.shadow.bias;
+				uniforms.crystalPreviewNormalBias.value = light.shadow.normalBias;
+				uniforms.crystalPreviewShadowRadius.value = light.shadow.radius;
+				uniforms.crystalPreviewShadowIntensity.value = light.shadow.intensity;
+			}
 
 			const targetAlpha = applyCrystalPreviewTargetAlpha(material, renderer);
 			material.userData.translucentCrystalPreview = {
@@ -255,13 +258,13 @@ vCrystalPreviewShadowCoord=crystalPreviewShadowMatrix*(crystalPreviewWorld+vec4(
 				nativeLightDirection: nativeLightDirection.toArray(),
 				linearLightColorIntensity: nativeLightColor.toArray(),
 				shadow: {
-					kind: 'renderer-map-per-fragment',
-					textureUuid: texture.uuid,
-					mapSize: [map.width, map.height],
+					kind: shadowsEnabled ? 'renderer-map-per-fragment' : 'renderer-shadows-disabled',
+					textureUuid: shadowsEnabled ? texture!.uuid : null,
+					mapSize: shadowsEnabled ? [map!.width, map!.height] : null,
 					type: shadowType,
 					bias: light.shadow.bias,
 					normalBias: light.shadow.normalBias,
-					intensity: light.shadow.intensity,
+					intensity: shadowsEnabled ? light.shadow.intensity : 0,
 					matrix: light.shadow.matrix.toArray(),
 					rendererFrame: renderer.info.render.frame,
 					stockReceiveShadow: object.receiveShadow,
@@ -315,7 +318,7 @@ export function createDeferredTranslucentCrystalPreviewMaterial(
 	deferred.userData.translucentCrystal = profile;
 
 	let current: MeshBasicMaterial | undefined;
-	let binding: { renderer: WebGLRenderer; scene: Scene; shadowType: number } | undefined;
+	let binding: { renderer: WebGLRenderer; scene: Scene; shadowType: number; shadowsEnabled: boolean } | undefined;
 	deferred.customProgramCacheKey = () => 'crystal-preview-awaiting-actual-draw-context';
 
 	const finalize: MeshBasicMaterial['onBeforeRender'] = (...args) => {
@@ -323,7 +326,8 @@ export function createDeferredTranslucentCrystalPreviewMaterial(
 			current &&
 			(binding?.renderer !== args[0] ||
 				binding?.scene !== args[1] ||
-				binding?.shadowType !== args[0].shadowMap.type)
+				binding?.shadowType !== args[0].shadowMap.type ||
+				binding?.shadowsEnabled !== args[0].shadowMap.enabled)
 		) {
 			current.dispose();
 			current = undefined;
@@ -350,7 +354,10 @@ export function createDeferredTranslucentCrystalPreviewMaterial(
 			deferred.onBeforeCompile = current.onBeforeCompile;
 			deferred.customProgramCacheKey = current.customProgramCacheKey;
 			deferred.needsUpdate = true;
-			binding = { renderer: args[0], scene: args[1], shadowType: args[0].shadowMap.type };
+			binding = {
+				renderer: args[0], scene: args[1], shadowType: args[0].shadowMap.type,
+				shadowsEnabled: args[0].shadowMap.enabled,
+			};
 		}
 	};
 
