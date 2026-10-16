@@ -71,6 +71,10 @@ export class FurnitureBatch {
 		mesh.customDistanceMaterial.userData.nuanShadowRecipe = true;
 		this.shadows.push(mesh.customDepthMaterial, mesh.customDistanceMaterial);
 
+		const shadowUniforms = {
+			nuanCustomData: { value: this.data.texture },
+			nuanCustomDataStride: { value: this.data.stride },
+		};
 		const recipes = new Map<Material, Map<boolean, Material>>();
 		mesh.onBeforeShadow = (_renderer, _object, _camera, _shadowCamera, _geometry, depth, group) => {
 			const source: Material | undefined = materials[(group as unknown as { materialIndex?: number })?.materialIndex ?? 0];
@@ -90,6 +94,14 @@ export class FurnitureBatch {
 				target.map = (source as MeshStandardMaterial).map;
 				target.alphaMap = (source as MeshStandardMaterial).alphaMap;
 				bindPaperMaterial(target, this.data);
+				const compile = target.onBeforeCompile;
+				target.onBeforeCompile = function (shader, renderer) {
+					compile.call(this, shader, renderer);
+					// Three keeps one uniform dictionary per depth material, not per
+					// cached group program. Plain variants must retain Paper bindings
+					// for a subsequent group that reuses an already compiled shader.
+					Object.assign(shader.uniforms, shadowUniforms);
+				};
 				recipe = target;
 				variants.set(distance, recipe);
 				this.shadows.push(recipe);
