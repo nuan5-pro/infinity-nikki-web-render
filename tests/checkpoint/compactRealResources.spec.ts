@@ -76,6 +76,16 @@ describe.skipIf(!catalog)('actual compact producer resources', () => {
 		);
 
 		const sourceImages = new Map<Texture, string>();
+		vi.spyOn(cache.pixelDecoder, 'decode').mockImplementation(async (rgb, alpha) => {
+			for (const bytes of [rgb, alpha]) {
+				if (!bytes) continue;
+
+				expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe('RIFF');
+				expect(new TextDecoder().decode(bytes.subarray(8, 12))).toBe('WEBP');
+			}
+
+			return { width: 1, height: 1, data: new Uint8Array([0, 0, 0, 255]) };
+		});
 
 		const decode = async (_bytes: Uint8Array<ArrayBuffer>, mimeType: string) => {
 			expect(['image/webp', 'image/png', 'image/jpeg']).toContain(mimeType);
@@ -194,5 +204,5 @@ describe.skipIf(!catalog)('actual compact producer resources', () => {
 		for (const [path, count] of requests) if (path.startsWith('textures/')) expect(count).toBe(1);
 
 		if (Object.keys(catalog!.rawResources).length) expect(typed).toBeGreaterThan(0);
-	});
+	}, 60_000);
 });

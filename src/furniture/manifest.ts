@@ -108,6 +108,24 @@ function validateCatalogResources(data: FurnitureDB): void {
 		) throw new Error(`[Furniture] Invalid image resource ${id}`);
 
 		for (const quality of ['full', 'lite'] as const) registerMember(resource[quality]);
+
+		if (resource.encoding !== undefined && resource.encoding !== 'rgb-alpha') throw new Error(`[Furniture] Invalid image encoding ${id}`);
+		if (resource.encoding === 'rgb-alpha' && resource.mimeType !== 'image/webp') throw new Error(`[Furniture] Split images must use WebP: ${id}`);
+
+		if (resource.alpha) {
+			if (
+				resource.encoding !== 'rgb-alpha' ||
+				typeof resource.alpha !== 'object' ||
+				Array.isArray(resource.alpha)
+			) throw new Error(`[Furniture] Invalid split alpha ${id}`);
+
+			for (const [quality, alpha] of Object.entries(resource.alpha)) {
+				if (quality !== 'full' && quality !== 'lite') throw new Error(`[Furniture] Invalid alpha quality ${id}`);
+
+				registerMember(alpha);
+				if (alpha.bundle !== resource[quality].bundle) throw new Error(`[Furniture] Split RGB/alpha must share one bundle: ${id}/${quality}`);
+			}
+		}
 	}
 
 	for (const list of ranges.values()) {
@@ -124,19 +142,9 @@ function validateCatalogMaterials(data: FurnitureDB): void {
 		if (!/^m-[a-f0-9]{16}$/.test(id) || 'images' in material) throw new Error(`[Furniture] Invalid material ${id}`);
 
 		for (const input of Object.values(readTextureInputs(material.extras ?? {}) ?? {})) {
-			for (const resource of input.images)
+			for (const resource of input.images) {
 				if (!data.textures[resource]) throw new Error(`[Furniture] Missing image ${resource}`);
-
-			for (const array of Object.values(input.paperArray ?? {})) {
-				const resource = data.rawResources[array.resource];
-				if (
-					!resource ||
-					!Number.isSafeInteger(array.byteOffset) ||
-					!Number.isSafeInteger(array.byteLength) ||
-					array.byteOffset < 0 ||
-					array.byteLength < 1 ||
-					array.byteOffset + array.byteLength > resource.bytes
-				) throw new Error('[Furniture] Invalid native paper array resource range');
+				if (input.paperLayer && data.textures[resource]!.encoding !== 'rgb-alpha') throw new Error(`[Furniture] Paper layer requires split images: ${resource}`);
 			}
 		}
 	}
@@ -219,14 +227,14 @@ function decodeFurniture(item: FurnitureDB['furniture'][number], data: Furniture
 
 export function decodeFurnitureCatalog(data: FurnitureDB): FurnitureModelConfig[] {
 	if (
-		data.schemaVersion !== 4 ||
+		data.schemaVersion !== 5 ||
 		!data.defaults ||
 		!data.materials ||
 		!data.textures ||
 		!data.rawResources ||
 		!data.bundles ||
 		!Array.isArray(data.furniture)
-	) throw new Error('[Furniture] schemaVersion 4 manifest is required');
+	) throw new Error('[Furniture] schemaVersion 5 manifest is required');
 
 	validateCatalogResources(data);
 	validateCatalogMaterials(data);

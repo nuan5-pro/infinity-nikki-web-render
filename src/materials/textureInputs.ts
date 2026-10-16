@@ -11,14 +11,6 @@ import {
 	SRGBColorSpace,
 	type Texture,
 } from 'three';
-import type { FurnitureRawReference } from '../furniture/types.js';
-
-export interface PaperArray extends FurnitureRawReference {
-	width: number
-	height: number
-	depth: number
-	encoding: 'rgba8-deflate'
-}
 
 export const TEXTURE_SLOTS = [
 	'D',
@@ -63,7 +55,6 @@ export interface TextureInput {
 	addressY?: 'TA_Wrap' | 'TA_Clamp' | 'TA_Mirror';
 	sampler?: 'view-world-wrap' | 'texture-asset';
 	paperLayer?: 'raw' | 'raw-mod25' | 'raw-div25' | 'hbc-decimal';
-	paperArray?: { full: PaperArray; lite: PaperArray };
 }
 
 export function readTextureInputs(userData: Record<string, unknown>): Partial<Record<TextureSlot, TextureInput>> | null {
@@ -97,12 +88,7 @@ export function readTextureInputs(userData: Record<string, unknown>): Partial<Re
 		if (typeof input.srgb !== 'boolean') throw new Error(`Material texture input ${role} requires explicit srgb`);
 		if (input.paperLayer !== undefined &&
 			!['raw', 'raw-mod25', 'raw-div25', 'hbc-decimal'].includes(input.paperLayer)) throw new Error(`Invalid PaperCustomData layer recipe: ${role}`);
-		if (input.paperLayer && (!input.paperArray ||
-			!['full', 'lite'].every((quality) => {
-				const array = input.paperArray?.[quality as 'full' | 'lite'];
-				return array && array.encoding === 'rgba8-deflate' && array.depth === input.images.length &&
-					[array.width, array.height, array.depth].every((value) => Number.isSafeInteger(value) && value > 0);
-			}))) throw new Error(`Missing producer-prepared native array: ${role}`);
+		if ('paperArray' in input) throw new Error(`Obsolete raw paper array; regenerate the furniture manifest: ${role}`);
 		if (input.usage === 'normal' && input.normalEncoding === undefined) throw new Error(`Material texture input ${role} requires normalEncoding`);
 
 		for (const key of ['mipmaps', 'nearest'] as const) {

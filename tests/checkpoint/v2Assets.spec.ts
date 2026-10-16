@@ -41,7 +41,7 @@ function asset(bytes: Uint8Array, directory = 'textures', extension = 'bin'): Fu
 
 function catalog(): FurnitureDB {
 	return {
-		schemaVersion: 4,
+		schemaVersion: 5,
 		defaults: {
 			mesh: { rotation: [0, 0, 0, 1], scale: [1, 1, 1], trans: [0, 0, 0] },
 			furniture: { root_offset: [0, 0, 0], assembled: false },
@@ -62,6 +62,22 @@ afterEach(() => {
 });
 
 describe('compact furniture resources', () => {
+	it('requires split RGB and alpha to share a bundle', () => {
+		const rgb = bundleFixture([new Uint8Array([1])]);
+		const alpha = bundleFixture([new Uint8Array([2])]);
+		const data = catalog();
+		data.bundles = { ...rgb.bundles, ...alpha.bundles };
+		data.textures[`t-${'a'.repeat(16)}`] = {
+			mimeType: 'image/webp',
+			encoding: 'rgb-alpha',
+			full: rgb.resource,
+			lite: rgb.resource,
+			alpha: { full: alpha.resource },
+		};
+
+		expect(() => decodeFurnitureCatalog(data)).toThrow('must share one bundle');
+	});
+
 	it('allows content aliases but rejects ambiguous bundle ownership and overlapping member ranges', () => {
 		const packet = bundleFixture([new Uint8Array([1]), new Uint8Array([2])]);
 		const data = catalog();

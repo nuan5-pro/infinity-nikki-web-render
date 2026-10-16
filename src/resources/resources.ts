@@ -1,9 +1,10 @@
-import { DataArrayTexture, Texture, type WebGLRenderer } from 'three';
+import { DataArrayTexture, DataTexture, Texture, type WebGLRenderer } from 'three';
 import type {
 	FurnitureAsset,
 	FurnitureDB,
 	FurniturePackedResource,
 	FurnitureRawReference,
+	FurnitureTextureResource,
 	ModelAssetProfile,
 } from '../furniture/types.js';
 import { AssetLeaseCache, type AssetLease } from './leaseCache.js';
@@ -14,7 +15,7 @@ import {
 	validatePackedResource,
 } from '../furniture/manifest.js';
 import { ImageBitmapSource } from './imageBitmapSource.js';
-import type { PaperArray } from '../materials/textureInputs.js';
+import { ImagePixelDecoder, type ImagePixels } from './imagePixels.js';
 
 export interface FurnitureResourceReader {
 	readonly renderer?: WebGLRenderer;
@@ -33,15 +34,20 @@ export class FurnitureResourceCache {
 	readonly binaries = new AssetLeaseCache<ArrayBuffer>(() => {}, true);
 	readonly members = new AssetLeaseCache<Uint8Array<ArrayBuffer>>(() => {}, true);
 	readonly images = new AssetLeaseCache<Texture>(disposeSourceTexture);
+	readonly pixels = new AssetLeaseCache<ImagePixels>(() => {});
+	readonly pixelDecoder = new ImagePixelDecoder();
 
 	clearUnused(): void {
 		this.images.clearUnused();
+		this.pixels.clearUnused();
 		this.members.clearUnused();
 		this.binaries.clearUnused();
 	}
 
 	dispose(): void {
 		this.images.clear();
+		this.pixels.clear();
+		this.pixelDecoder.dispose();
 		this.members.clear();
 		this.binaries.clear();
 	}
@@ -83,30 +89,6 @@ async function decodeImage(data: Uint8Array<ArrayBuffer>, mimeType: string): Pro
 	texture.flipY = false;
 	texture.needsUpdate = true;
 	return texture;
-}
-
-async function inflatePaperArray(compressed: Uint8Array<ArrayBuffer>, length: number, checkOwner: () => void): Promise<Uint8Array<ArrayBuffer>> {
-	const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate'));
-	const reader = stream.getReader();
-	const data = new Uint8Array(length);
-	let offset = 0;
-	try {
-		for (;;) {
-			const { value, done } = await reader.read();
-			checkOwner();
-			if (done) break;
-			if (offset + value.length > length) throw new Error('Native paper array decoded length overflow');
-
-			data.set(value, offset);
-			offset += value.length;
-		}
-	} finally {
-		await reader.cancel();
-	}
-
-	if (offset !== length) throw new Error('Native paper array decoded length mismatch');
-
-	return data;
 }
 
 /** Share decoded pixels by content. Each owner holds its sampler clones. */
@@ -230,8 +212,28 @@ export class FurnitureResources implements FurnitureResourceReader {
 
 		validatePackedResource(asset, this.catalog.bundles);
 
-		const key = `image:${asset.sha256}:${asset.bytes}:${definition.mimeType}`;
+		const key = `image:${this.imageKey(definition, quality)}`;
 		return this.borrowTexture(key, this.cache.images, async (signal) => {
+			if (definition.encoding === 'rgb-alpha') {
+				const lease = this.acquireImagePixels(definition, quality);
+				const abort = () => lease.release();
+				signal.addEventListener('abort', abort, { once: true });
+
+				try {
+					signal.throwIfAborted();
+					const image = await lease.ready;
+					signal.throwIfAborted();
+
+					const texture = new DataTexture(image.data, image.width, image.height);
+					texture.flipY = false;
+					texture.needsUpdate = true;
+					return texture;
+				} finally {
+					signal.removeEventListener('abort', abort);
+					lease.release();
+				}
+			}
+
 			const lease = this.acquirePacked(asset);
 			const abort = () => lease.release();
 			signal.addEventListener('abort', abort, { once: true });
@@ -253,11 +255,11 @@ export class FurnitureResources implements FurnitureResourceReader {
 			const asset = definition?.[quality];
 			if (!asset) throw new Error(`[Furniture] Array image ${id}/${quality} unavailable`);
 
-			return `${asset.sha256}:${asset.bytes}:${definition.mimeType}`;
+			return this.imageKey(definition, quality);
 		});
 		return this.texture(`array:${keys.join(';')}`, async () => {
 			const sources = await Promise.all(ids.map((id) => this.image(id, quality)));
-			const images = sources.map((source) => source.source.data as ImageBitmap);
+			const images = sources.map((source) => source.source.data as ImageBitmap | ImagePixels);
 			const { width, height } = images[0]!;
 			if (
 				!width ||
@@ -271,6 +273,11 @@ export class FurnitureResources implements FurnitureResourceReader {
 
 			const data = new Uint8Array(width * height * 4 * images.length);
 			images.forEach((image, index) => {
+				if ('data' in image) {
+					data.set(image.data, index * width * height * 4);
+					return;
+				}
+
 				context.clearRect(0, 0, width, height);
 				context.drawImage(image, 0, 0);
 				data.set(context.getImageData(0, 0, width, height).data, index * width * height * 4);
@@ -283,29 +290,96 @@ export class FurnitureResources implements FurnitureResourceReader {
 		});
 	}
 
-	async paperArray(reference: PaperArray): Promise<Texture> {
-		const { width, height, depth } = reference;
-		const length = width * height * depth * 4;
-		if (
-			reference.encoding !== 'rgba8-deflate' ||
-			![width, height, depth].every((value) => Number.isSafeInteger(value) && value > 0) ||
-			!Number.isSafeInteger(length) ||
-			length > 512 * 1024 * 1024
-		) throw new Error('Invalid native paper array dimensions or encoding');
+	private imageKey(definition: FurnitureTextureResource, quality: ModelAssetProfile): string {
+		const asset = definition[quality];
+		const alpha = definition.alpha?.[quality];
+		return `${asset.sha256}:${asset.bytes}:${definition.mimeType}:${definition.encoding ?? ''}:${alpha?.sha256 ?? ''}:${alpha?.bytes ?? 0}`;
+	}
 
-		const gl = this.renderer?.getContext() as WebGL2RenderingContext | undefined;
-		if (this.renderer && gl && (
-			width > this.renderer.capabilities.maxTextureSize ||
-			height > this.renderer.capabilities.maxTextureSize ||
-			depth > gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS)
-		)) throw new Error('Native paper array exceeds GPU limits');
+	private acquireImagePixels(definition: FurnitureTextureResource, quality: ModelAssetProfile): AssetLease<ImagePixels> {
+		if (definition.encoding !== 'rgb-alpha') throw new Error('Paper array requires split images');
 
-		return this.texture(`paper:${JSON.stringify(reference)}`, async () => {
-			const compressed = await this.read(reference);
-			const data = await inflatePaperArray(compressed as Uint8Array<ArrayBuffer>, length, () => {
-				if (this.disposed) throw new Error('Native paper array owner disposed');
-			});
-			const texture = new DataArrayTexture(data, width, height, depth);
+		return this.cache.pixels.acquire(this.imageKey(definition, quality), async (signal) => {
+			const color = this.acquirePacked(definition[quality]);
+			let alpha: AssetLease<Uint8Array<ArrayBuffer>> | undefined;
+			const abort = () => {
+				color.release();
+				alpha?.release();
+			};
+			signal.addEventListener('abort', abort, { once: true });
+
+			try {
+				signal.throwIfAborted();
+				if (definition.alpha?.[quality]) alpha = this.acquirePacked(definition.alpha[quality]!);
+
+				const [rgb, mask] = await Promise.all([color.ready, alpha?.ready]);
+				return await this.cache.pixelDecoder.decode(rgb, mask, signal);
+			} finally {
+				signal.removeEventListener('abort', abort);
+				abort();
+			}
+		});
+	}
+
+	async paperArray(ids: readonly string[], quality: ModelAssetProfile): Promise<Texture> {
+		if (!ids.length || this.disposed) throw new Error('Paper array requires an active resource owner and layers');
+
+		const definitions = ids.map((id) => {
+			const definition = this.catalog.textures[id];
+			if (!definition?.[quality] || definition.encoding !== 'rgb-alpha') throw new Error(`Paper layer ${id}/${quality} is not a split image`);
+
+			return definition;
+		});
+		const key = `paper:${definitions.map((definition) => this.imageKey(definition, quality)).join(';')}`;
+		return this.borrowTexture(key, this.textures, async (signal) => {
+			let data: Uint8Array<ArrayBuffer> | undefined;
+			let width = 0;
+			let height = 0;
+
+			for (let i = 0; i < definitions.length; i++) {
+				signal.throwIfAborted();
+
+				const lease = this.acquireImagePixels(definitions[i]!, quality);
+				const abort = () => lease.release();
+				signal.addEventListener('abort', abort, { once: true });
+
+				try {
+					const image = await lease.ready;
+					signal.throwIfAborted();
+
+					if (!data) {
+						width = image.width;
+						height = image.height;
+						const length = width * height * definitions.length * 4;
+						if (
+							![width, height, length].every((value) => Number.isSafeInteger(value) && value > 0) ||
+							length > 512 * 1024 * 1024
+						) throw new Error('Invalid native paper array dimensions');
+
+						const gl = this.renderer?.getContext() as WebGL2RenderingContext | undefined;
+						if (this.renderer && gl && (
+							width > this.renderer.capabilities.maxTextureSize ||
+							height > this.renderer.capabilities.maxTextureSize ||
+							definitions.length > gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS)
+						)) throw new Error('Native paper array exceeds GPU limits');
+
+						data = new Uint8Array(length);
+					}
+
+					if (
+						image.width !== width ||
+						image.height !== height ||
+						image.data.length !== width * height * 4
+					) throw new Error('Paper array image dimensions differ');
+
+					data.set(image.data, i * width * height * 4);
+				} finally {
+					signal.removeEventListener('abort', abort);
+					lease.release();
+				}
+			}
+
+			const texture = new DataArrayTexture(data!, width, height, definitions.length);
 			texture.flipY = false;
 			texture.needsUpdate = true;
 			return texture;
