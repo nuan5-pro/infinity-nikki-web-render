@@ -43,7 +43,7 @@ await furniture.setup('/assets/furniture/')
 await furniture.load([1170000315])
 ```
 
-`setup(resourceRoot)` 初始化一次，加载 schema 4 的 `manifest.json` 及其相对路径资源。`decoderPath` 是独立的 Draco 解码器目录 URL。`load(assetIds)` 可选，用于预载模型。
+`setup(resourceRoot)` 初始化一次，加载 schema 5 的 `manifest.json` 及其相对路径资源。`decoderPath` 是独立的 Draco 解码器目录 URL。`load(assetIds)` 可选，用于预载模型。
 
 ### 实例编辑
 

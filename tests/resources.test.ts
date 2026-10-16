@@ -1,75 +1,114 @@
-import { deflateSync } from 'node:zlib';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DataArrayTexture } from 'three';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DataArrayTexture, DataTexture } from 'three';
 import { FurnitureResourceCache, FurnitureResources } from '../src/resources/resources.js';
-import type { PaperArray } from '../src/materials/textureInputs.js';
+import type { FurnitureTextureResource } from '../src/furniture/types.js';
 import { bundleFixture } from './checkpoint/bundleFixture';
 
 const owners: FurnitureResources[] = [];
-const cache = new FurnitureResourceCache();
+let cache: FurnitureResourceCache;
 
-afterEach(() => {
-	for (const owner of owners) owner.dispose();
-
-	owners.length = 0;
-	cache.clearUnused();
+beforeEach(() => {
+	cache = new FurnitureResourceCache();
 });
 
-function paperArray(bytes: Uint8Array) {
-	const compressed = new Uint8Array(deflateSync(bytes));
-	const bundle = bundleFixture([compressed]);
-	const resource = `r-${bundle.resource.sha256.slice(0, 16)}`;
-	const fetch = vi.fn(async () => bundle.data.buffer);
-	const owner = new FurnitureResources({
-		textures: {},
-		rawResources: { [resource]: bundle.resource },
-		bundles: bundle.bundles,
-	}, '/', cache, undefined, fetch);
-	owners.push(owner);
+afterEach(() => {
+	for (const owner of owners.splice(0)) owner.dispose();
 
-	const reference: PaperArray = {
-		resource,
-		byteOffset: 0,
-		byteLength: compressed.length,
-		width: 1,
-		height: 1,
-		depth: 2,
-		encoding: 'rgba8-deflate',
+	cache.dispose();
+});
+
+function fixture() {
+	const bundle = bundleFixture([new Uint8Array([1]), new Uint8Array([2]), new Uint8Array([3])]);
+	const fetch = vi.fn(async () => bundle.data.buffer);
+	const textures: Record<string, FurnitureTextureResource> = {
+		a: {
+			mimeType: 'image/webp',
+			encoding: 'rgb-alpha',
+			full: bundle.resources[0]!,
+			lite: bundle.resources[0]!,
+			alpha: { full: bundle.resources[2]! },
+		},
+		b: {
+			mimeType: 'image/webp',
+			encoding: 'rgb-alpha',
+			full: bundle.resources[1]!,
+			lite: bundle.resources[1]!,
+		},
 	};
 
-	return { owner, reference, fetch };
+	const decode = vi.spyOn(cache.pixelDecoder, 'decode').mockImplementation(async (rgb, alpha, signal) => {
+		signal.throwIfAborted();
+		return { width: 1, height: 1, data: new Uint8Array([rgb[0]!, 45, 67, alpha ? 0 : 255]) };
+	});
+
+	const owner = new FurnitureResources({ textures, rawResources: {}, bundles: bundle.bundles }, '/', cache, undefined, fetch);
+	owners.push(owner);
+
+	return { owner, decode, fetch, textures };
 }
 
-describe('producer-prepared native paper arrays', () => {
-	it('inflates the complete RGBA layer order once and releases its owned texture', async () => {
-		const bytes = new Uint8Array([1, 2, 3, 4, 11, 12, 13, 14]);
-		const { owner, reference, fetch } = paperArray(bytes);
-		const texture = await owner.paperArray(reference) as DataArrayTexture;
-		expect(texture).toBeInstanceOf(DataArrayTexture);
-		expect(texture.image).toMatchObject({ width: 1, height: 1, depth: 2, data: bytes });
+describe('split-image native paper arrays', () => {
+	it('assembles ordered layers with hidden RGB, shares transport, and releases decoded layer staging', async () => {
+		const { owner, decode, fetch } = fixture();
+		const texture = await owner.paperArray(['a', 'b'], 'full') as DataArrayTexture;
+		expect(texture.image).toMatchObject({
+			width: 1,
+			height: 1,
+			depth: 2,
+			data: new Uint8Array([1, 45, 67, 0, 2, 45, 67, 255]),
+		});
 		expect(texture.flipY).toBe(false);
-		expect(await owner.paperArray({ ...reference })).toBe(texture);
+		expect(await owner.paperArray(['a', 'b'], 'full')).toBe(texture);
+		expect(decode).toHaveBeenCalledTimes(2);
 		expect(fetch).toHaveBeenCalledTimes(1);
 
 		const disposed = vi.fn();
 		texture.addEventListener('dispose', disposed);
 		owner.dispose();
-		expect(disposed).toHaveBeenCalledTimes(1);
+		expect(disposed).toHaveBeenCalledOnce();
 	});
 
-	it('rejects both truncated and oversized decoded arrays even when transport hashes are valid', async () => {
-		for (const length of [7, 9]) {
-			const { owner, reference } = paperArray(new Uint8Array(length));
-			await expect(owner.paperArray(reference)).rejects.toThrow(length < 8 ? 'decoded length mismatch' : 'decoded length overflow');
-		}
+	it('keeps alpha quality in the cache identity and also supplies ordinary 2D bindings', async () => {
+		const { owner, decode } = fixture();
+		const full = await owner.image('a', 'full') as DataTexture;
+		const lite = await owner.image('a', 'lite') as DataTexture;
+		expect(full.image.data).toEqual(new Uint8Array([1, 45, 67, 0]));
+		expect(lite.image.data).toEqual(new Uint8Array([1, 45, 67, 255]));
+		expect(await owner.image('a', 'full')).toBe(full);
+		expect(decode).toHaveBeenCalledTimes(2);
 	});
 
-	it('rejects invalid allocation sizes before fetching any payload', async () => {
-		const { owner, reference, fetch } = paperArray(new Uint8Array(8));
-		for (const dimensions of [{ width: 0 }, { depth: 1.5 }, { width: 2 ** 30 }]) {
-			await expect(owner.paperArray({ ...reference, ...dimensions })).rejects.toThrow('dimensions or encoding');
-		}
+	it('rejects mismatched layers and oversized allocations', async () => {
+		const { owner, decode } = fixture();
+		decode.mockResolvedValueOnce({ width: 1, height: 1, data: new Uint8Array(4) });
+		decode.mockResolvedValueOnce({ width: 2, height: 1, data: new Uint8Array(8) });
+		await expect(owner.paperArray(['a', 'b'], 'full')).rejects.toThrow('dimensions differ');
 
+		decode.mockResolvedValueOnce({ width: 2 ** 30, height: 1, data: new Uint8Array(4) });
+		await expect(owner.paperArray(['a'], 'full')).rejects.toThrow('dimensions');
+	});
+
+	it('does not publish late decoder results after owner cancellation', async () => {
+		const { owner, decode } = fixture();
+		let complete!: () => void;
+		decode.mockImplementationOnce(() => new Promise((resolve) => {
+			complete = () => resolve({ width: 1, height: 1, data: new Uint8Array(4) });
+		}));
+
+		const pending = owner.paperArray(['a'], 'full');
+		await vi.waitFor(() => expect(complete).toBeTypeOf('function'));
+
+		owner.dispose();
+		complete();
+		await expect(pending).rejects.toThrow(/lease|abort/i);
+	});
+
+	it('rejects missing or unsplit layers before transport', async () => {
+		const { owner, fetch, textures } = fixture();
+		delete textures.a!.encoding;
+
+		await expect(owner.paperArray(['a'], 'full')).rejects.toThrow('not a split image');
+		await expect(owner.paperArray(['missing'], 'lite')).rejects.toThrow('not a split image');
 		expect(fetch).not.toHaveBeenCalled();
 	});
 });

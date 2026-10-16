@@ -28,7 +28,7 @@ vi.mock('../src/furniture/assetStore.js', () => ({
 }));
 import { createFurnitureLayer } from '../src/furniture/layer.js';
 
-const manifest = { schemaVersion: 4, defaults: {
+const manifest = { schemaVersion: 5, defaults: {
 	mesh: { rotation: [0, 0, 0, 1], scale: [1, 1, 1], trans: [0, 0, 0] },
 	furniture: { root_offset: [0, 0, 0], assembled: false },
 }, materials: {}, textures: {}, rawResources: {}, bundles: {}, furniture: [{

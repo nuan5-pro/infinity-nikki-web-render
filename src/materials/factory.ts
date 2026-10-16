@@ -288,10 +288,7 @@ async function resolveMaterialTextures({
 				const first = refs[0]!;
 				if (refs.some((ref) => ref.resources !== first.resources || ref.quality !== first.quality)) throw new Error('[Furniture] Array layers require one resource owner and quality');
 
-				const array = input.paperArray?.[first.quality];
-				if (!array || array.depth !== input.images.length) throw new Error(`[Furniture] ${role} requires producer-prepared native array`);
-
-				slots[role] = await first.resources.paperArray(array);
+				slots[role] = await first.resources.paperArray(refs.map((ref) => ref.resource), first.quality);
 				for (const slot of first.standardSlots ?? []) {
 					const binding = (sourceMat as Material & StandardTextures)[slot];
 					if (binding) standardBindings.push({ role, slot, binding });

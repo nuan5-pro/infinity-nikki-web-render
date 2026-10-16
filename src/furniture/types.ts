@@ -16,6 +16,8 @@ export interface FurnitureTextureResource {
 	mimeType: 'image/webp' | 'image/png' | 'image/jpeg'
 	full: FurniturePackedResource
 	lite: FurniturePackedResource
+	encoding?: 'rgb-alpha'
+	alpha?: Partial<Record<ModelAssetProfile, FurniturePackedResource>>
 }
 
 export interface FurnitureRawReference {
@@ -83,7 +85,7 @@ export interface FurnitureModelConfig {
 }
 
 export interface FurnitureDB {
-	schemaVersion: 4
+	schemaVersion: 5
 	defaults: {
 		mesh: { rotation: number[]; scale: number[]; trans: number[] }
 		furniture: { root_offset: number[]; assembled: boolean }
