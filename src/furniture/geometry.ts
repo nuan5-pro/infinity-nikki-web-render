@@ -456,6 +456,9 @@ export async function processGeometryForItem(
 
 			for (const meshEntry of meshAsset.meshEntries) {
 				const geom = meshEntry.geometry.clone();
+				// BufferGeometry.clone shares userData; derived frame proofs belong to
+				// this assembly, never the cached source used by another material tier.
+				geom.userData = { ...meshEntry.geometry.userData };
 				ownedGeometries.add(geom);
 				// Furniture uses ordinary InstancedMesh in static rest pose, not skinning.
 				// Keeping unused joint streams also prevents merging uint8/uint16 Draco IDs.
