@@ -17,7 +17,7 @@ type PreparationContext = [
 const finalizers = new WeakMap<Material, Finalizer>();
 const finalized = new WeakMap<
 	Material,
-	{ renderer: DrawContext[0]; scene: DrawContext[1]; shadowType: number }
+	{ renderer: DrawContext[0]; scene: DrawContext[1]; shadowType: number; shadowsEnabled: boolean }
 >();
 const dependencies = new WeakMap<Material, readonly Material[]>();
 
@@ -49,7 +49,8 @@ export function materialNeedsFinalization(material: Material, renderer?: DrawCon
 		(!!renderer &&
 			(previous.renderer !== renderer ||
 				previous.scene !== scene ||
-				previous.shadowType !== renderer.shadowMap.type))
+				previous.shadowType !== renderer.shadowMap.type ||
+				previous.shadowsEnabled !== renderer.shadowMap.enabled))
 	);
 }
 
@@ -62,5 +63,6 @@ export function finalizeMaterial(material: Material, ...context: PreparationCont
 		renderer: context[0],
 		scene: context[1],
 		shadowType: context[0].shadowMap.type,
+		shadowsEnabled: context[0].shadowMap.enabled,
 	});
 }

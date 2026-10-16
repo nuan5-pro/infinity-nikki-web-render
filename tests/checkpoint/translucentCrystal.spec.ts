@@ -476,6 +476,66 @@ describe.skipIf(!actual || !domain)(
 			expect(shader.uniforms.crystalPreviewShadowMap!.value).toBe(light.shadow.map.depthTexture);
 		});
 
+		it('supports starting without shadows and toggling them without losing light or geometry bindings', () => {
+			const profile = { ...Object.values(actual!)[0]!, preview: domain! };
+			const textures = Object.fromEntries(Object.keys(profile.textures).map((role) => [role, new Texture()]));
+			const scene = new Scene();
+			const light = new DirectionalLight(0x456abc);
+			light.position.set(10, 20, 30);
+			light.castShadow = true;
+			scene.add(light, light.target);
+			const renderer = {
+				shadowMap: { enabled: false, type: PCFShadowMap },
+				capabilities: { reversedDepthBuffer: false },
+				getRenderTarget: () => null,
+				getContext: () => ({
+					getContextAttributes: () => ({ alpha: true, premultipliedAlpha: true }),
+				}),
+				info: { render: { frame: 1 } },
+			} as unknown as WebGLRenderer;
+			const material = createDeferredTranslucentCrystalPreviewMaterial(profile, textures);
+			const data = source(profile);
+			restoreTranslucentCrystalGeometryProof(data.geometry, data.material, profile);
+			material.userData.ueTranslucentCrystalProofs = data.material.userData.ueTranslucentCrystalProofs;
+			const mesh = new Mesh(data.geometry, material);
+			const camera = new PerspectiveCamera();
+
+			for (const enabled of [false, true, false, true]) {
+				renderer.shadowMap.enabled = enabled;
+				light.shadow.map?.dispose();
+				light.shadow.map = enabled ? new WebGLRenderTarget(16, 16) : null;
+				if (light.shadow.map) {
+					light.shadow.map.depthTexture = new DepthTexture(16, 16);
+					light.shadow.map.depthTexture.compareFunction = LessEqualCompare;
+				}
+				light.intensity += 0.5;
+				Reflect.apply(material.onBeforeRender, material, [renderer, scene, camera, data.geometry, mesh, null]);
+				const shader = {
+					uniforms: {} as Record<string, { value: unknown }>,
+					vertexShader: ShaderLib.basic.vertexShader,
+					fragmentShader: ShaderLib.basic.fragmentShader,
+				};
+				Reflect.apply(material.onBeforeCompile, material, [shader, renderer]);
+				if (enabled) {
+					expect(shader.fragmentShader).toContain('uniform sampler2DShadow crystalPreviewShadowMap;');
+					expect(shader.uniforms.crystalPreviewShadowMap!.value).toBe(light.shadow.map!.depthTexture);
+				} else {
+					expect(shader.fragmentShader).toContain('float crystalPreviewShadow() { return 1.0; }');
+					expect(shader.fragmentShader).not.toContain('uniform sampler2DShadow crystalPreviewShadowMap;');
+					expect(shader.uniforms.crystalPreviewShadowMap!.value).toBeNull();
+				}
+				expect((shader.uniforms.crystalNativeLightColor!.value as Vector3).toArray()).toEqual([
+					light.color.r * light.intensity, light.color.g * light.intensity, light.color.b * light.intensity,
+				]);
+				expect(material.userData.ueTranslucentCrystalProofs).toBe(data.material.userData.ueTranslucentCrystalProofs);
+			}
+			light.shadow.map?.dispose();
+			material.dispose();
+			data.geometry.dispose();
+			data.material.dispose();
+			for (const texture of Object.values(textures)) texture.dispose();
+		});
+
 	},
 );
 
