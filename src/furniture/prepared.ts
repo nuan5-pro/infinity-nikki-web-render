@@ -250,8 +250,7 @@ export function decodePreparedGeometry(buffer: ArrayBuffer, input: string): { ge
 	try {
 		for (const [name, attribute] of Object.entries(header.attributes))
 			geometry.setAttribute(name, read(attribute));
-		// BVH construction reorders triangle indices. Keep the globally cached
-		// artifact immutable while vertex streams remain shared read-only views.
+		// Index edits stay local while vertex streams share read-only artifact bytes.
 		if (header.index) geometry.setIndex(read(header.index).clone());
 		const position = geometry.getAttribute('position');
 		if (!position || position.itemSize !== 3) throw new Error('[Prepared geometry] Missing positions');
@@ -286,6 +285,8 @@ export function decodePreparedGeometry(buffer: ArrayBuffer, input: string): { ge
 
 export async function restorePreparedGeometry(buffer: ArrayBuffer, input: string, getMaterial: (id: string) => Promise<MaterialAssetData>): Promise<GeometryData> {
 	const { geometry, header } = decodePreparedGeometry(buffer, input);
+	// Runtime geometry owns its arrays before worker transfer; the encoded cache stays reusable.
+	for (const [name, attribute] of Object.entries(geometry.attributes)) geometry.setAttribute(name, attribute.clone());
 	const sources: Material[] = [];
 	const plainMaterials: Material[] = [];
 	const materialRegistry: MaterialRegistry = new Map();

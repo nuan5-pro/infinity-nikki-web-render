@@ -16,6 +16,7 @@ import {
 import { processGeometryForItem, type GeometryData } from './geometry.js';
 import { preparedGeometryInput, restorePreparedGeometry } from './prepared.js';
 import { applyHomeObjectLightDefault } from './lightDefault.js';
+import { GeometryProcessor } from './geometryProcessor.js';
 import { disposeNNClothResources } from '../materials/nncloth/nnclothMaterial.js';
 import { disposeWaterFxResources } from '../materials/water/waterFxAsset.js';
 import { disposeFoliageCycleAtlases } from '../materials/foliage/foliageShader.js';
@@ -31,6 +32,7 @@ export interface LoadedFurniture {
 export class FurnitureAssetCache {
 	readonly resources = new FurnitureResourceCache();
 	readonly models = new AssetLeaseCache<ModelAssetData>((asset) => asset.dispose(), true);
+	readonly geometry = new GeometryProcessor();
 	private decoders = new Map<string, { loader: GLTFLoader; draco: DRACOLoader; pending: number }>();
 	private disposed = false;
 
@@ -71,6 +73,7 @@ export class FurnitureAssetCache {
 		this.disposed = true;
 		this.models.clear();
 		this.resources.dispose();
+		this.geometry.dispose();
 		for (const owner of this.decoders.values()) if (!owner.pending) owner.draco.dispose();
 
 		this.decoders.clear();
@@ -196,16 +199,16 @@ export class FurnitureAssetStore {
 						]);
 						signal.throwIfAborted();
 						return assembleMeshAsset(model, mesh, new Map(entries));
-					});
+					}, undefined, { processor: this.cache.geometry, signal });
 				if (!data) throw new Error(`Furniture ${id} has no renderable geometry`);
 				if (!data.geometry.hasAttribute('nuanSourceMesh')) throw new Error('Prepared geometry lacks original component indices');
-
 				if (disposed) {
 					data.geometry.dispose();
 					for (const material of new Set(data.plainMaterials)) material.dispose();
 
 					throw new Error('Geometry load cancelled');
 				}
+				if (prepared) await this.cache.geometry.prepare([data.geometry], [null], true, signal);
 
 				applyHomeObjectLightDefault(config, data.plainMaterials, data.meshBaseNames, data.slotMeshIndices);
 				return { config, data, dispose };

@@ -6,6 +6,8 @@
 
 导出 ESM TypeScript 源码，由应用构建工具编译。应用与包共用 `three` 和 `three-mesh-bvh`，支持 Three.js `>=0.183.2 <0.184.0` 的 `WebGLRenderer`。
 
+图片解码、顶点变换和 BVH 构建由包内的模块 Worker 池处理；应用构建工具负责打包 Worker 入口，家具层统一管理资源缓存和任务取消。
+
 ## 渲染上下文
 
 以下示例中的 `renderer`、`scene`、`camera` 和 `requestFrame` 由应用提供。

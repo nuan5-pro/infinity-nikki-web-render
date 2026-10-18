@@ -15,6 +15,7 @@ import {
 } from '../../src/furniture/prepared.js';
 import type { GeometryPreparationSnapshot } from '../../src/furniture/geometry.js';
 import type { FurnitureModelConfig } from '../../src/furniture/types.js';
+import { geometryTransfers, packGeometryBuffers, processGeometryBuffers, restoreGeometryBuffers } from '../../src/furniture/geometryBuffers.js';
 
 function fixture() {
 	const geometry = new BufferGeometry();
@@ -88,6 +89,31 @@ describe('offline prepared geometry', () => {
 		expect(template.userData.geometryProof).toBeUndefined();
 		restored.geometry.dispose();
 		restored.plainMaterials.forEach((material) => material.dispose());
+	});
+
+	it('keeps the encoded cache intact when runtime arrays move to a BVH worker', async () => {
+		const { catalog, snapshot } = fixture();
+		snapshot.geometry.setAttribute('normal', new Float32BufferAttribute([0, 0, .99, 0, 0, .99, 0, 0, .99], 3));
+		const bytes = encodePreparedGeometry(snapshot, 'input', ['m'], catalog);
+		const before = new Uint8Array(bytes).slice();
+		const template = new MeshStandardMaterial();
+		template.name = 'source';
+		const getMaterial = async () => ({ material: template, materialRegistry: new Map(), dispose() {} });
+		const restored = await restorePreparedGeometry(bytes, 'input', getMaterial);
+		const input = { geometries: [packGeometryBuffers(restored.geometry)], matrices: [null], boundsTree: true };
+		const moved = structuredClone(input, { transfer: geometryTransfers(input.geometries) });
+		const output = processGeometryBuffers(moved);
+		restoreGeometryBuffers(restored.geometry, output[0]!);
+		expect(new Uint8Array(bytes)).toEqual(before);
+		expect(restored.geometry.getAttribute('normal').array).toEqual(snapshot.geometry.getAttribute('normal').array);
+		expect(restored.geometry.boundsTree).toBeDefined();
+		const second = await restorePreparedGeometry(bytes, 'input', getMaterial);
+		expect(second.geometry.getAttribute('position').array).toEqual(restored.geometry.getAttribute('position').array);
+		for (const data of [restored, second]) {
+			data.geometry.dispose();
+			data.plainMaterials.forEach(material => material.dispose());
+		}
+		template.dispose();
 	});
 
 	it('reuses equal plain sources while retaining every prepared slot and its dye mapping', async () => {

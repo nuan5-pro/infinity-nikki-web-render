@@ -160,6 +160,7 @@ import {
 	mergeWaterFxDomains,
 } from '../materials/water/waterFxGeometry.js';
 import { type WaterFxMaterialOptions } from '../materials/water/waterFxMaterial.js';
+import { prepareGeometryBuffers, type GeometryProcessing } from './geometryProcessor.js';
 
 const LAYER_COLOR_ATTRIBUTE = 'ueLayerColor';
 const FOLIAGE_CYCLE_ATTRIBUTE = 'foliageCycleU';
@@ -323,6 +324,12 @@ function reverseGeometryWinding(geometry: BufferGeometry): void {
 
 /** Bake transforms without changing the authored normal-map basis. */
 export function applyGeometryTransform(geometry: BufferGeometry, matrix: Matrix4): void {
+	transformGeometryFrame(geometry, matrix);
+	geometry.applyMatrix4(matrix);
+	if (matrix.determinant() < 0) reflectGeometry(geometry);
+}
+
+function transformGeometryFrame(geometry: BufferGeometry, matrix: Matrix4): void {
 	transformJewelryMaskedGeometry(geometry, matrix);
 	transformParallaxCardGeometryProof(geometry, matrix);
 	transformParallaxCardBasisV2(geometry, matrix);
@@ -348,10 +355,9 @@ export function applyGeometryTransform(geometry: BufferGeometry, matrix: Matrix4
 				.toArray(),
 		};
 	}
+}
 
-	geometry.applyMatrix4(matrix);
-	if (matrix.determinant() >= 0) return;
-
+function reflectGeometry(geometry: BufferGeometry): void {
 	reverseGeometryWinding(geometry);
 
 	// Three.js transforms tangent.xyz only; B = cross(N, T) * w needs the mirror sign too.
@@ -375,8 +381,10 @@ export async function processGeometryForItem(
 		selection: FurnitureAssetSelection,
 	) => Promise<MeshAssetData | null>,
 	capture?: (snapshot: GeometryPreparationSnapshot) => void,
+	processing?: GeometryProcessing,
 ): Promise<GeometryData | undefined> {
 	const allGeometries: BufferGeometry[] = [];
+	const transforms: Matrix4[] = [];
 	const sourceMaterials: Material[] = [];
 
 	const ownedGeometries = new Set<BufferGeometry>();
@@ -809,14 +817,17 @@ export async function processGeometryForItem(
 				// Only missing normals need a fallback. Recomputing imported normals changes
 				// smoothing and breaks the basis against which the normal map was authored.
 				if (!geom.hasAttribute('normal')) geom.computeVertexNormals();
-				applyGeometryTransform(geom, meshEntry.localMatrix);
+				transformGeometryFrame(geom, meshEntry.localMatrix);
+				if (meshEntry.localMatrix.determinant() < 0) reflectGeometry(geom);
 
 				// Transport native XYZ centimeters through the export frame.
 				tempScale.set(meshConfig.scale.x, meshConfig.scale.z, meshConfig.scale.y);
 				tempQuat.set(meshConfig.rotation.x, meshConfig.rotation.z, meshConfig.rotation.y, meshConfig.rotation.w);
 				tempTrans.set(meshConfig.trans.x / 100, meshConfig.trans.z / 100, -meshConfig.trans.y / 100);
 				tempMatrix.compose(tempTrans, tempQuat, tempScale);
-				applyGeometryTransform(geom, tempMatrix);
+				transformGeometryFrame(geom, tempMatrix);
+				if (tempMatrix.determinant() < 0) reflectGeometry(geom);
+				transforms.push(tempMatrix.clone().multiply(meshEntry.localMatrix));
 				if (readFurnitureSurface(sourceMaterial.userData.surface)?.homeUv) {
 					sourceMaterial.userData.homeWallBasis = homeWallBasis(tempMatrix.clone().multiply(meshEntry.localMatrix));
 				}
@@ -842,6 +853,7 @@ export async function processGeometryForItem(
 			console.warn(`[ModelManager] No geometries loaded for itemId: ${itemId}`);
 			return undefined;
 		}
+		await prepareGeometryBuffers(allGeometries, transforms, processing);
 
 		const hadTangents = allGeometries.map((geom) => geom.hasAttribute('tangent'));
 		if (
@@ -981,7 +993,6 @@ export async function processGeometryForItem(
 		transformDiamondBillboardCurrentGeometry(geometry, tempMatrix);
 		transformAnimalMaskedCurrentGeometry(geometry, tempMatrix);
 		transformABSFXCurrentGeometry(geometry, tempMatrix);
-		geometry.translate(offset.y / 100, offset.z / 100, offset.x / 100);
 
 		transformJewelryMaskedGeometry(geometry, tempMatrix.makeScale(100, 100, 100));
 		transformCharacterJewelGeometry(geometry, tempMatrix);
@@ -991,9 +1002,9 @@ export async function processGeometryForItem(
 		transformDiamondBillboardCurrentGeometry(geometry, tempMatrix);
 		transformAnimalMaskedCurrentGeometry(geometry, tempMatrix);
 		transformABSFXCurrentGeometry(geometry, tempMatrix);
-		geometry.scale(100, 100, 100);
 
-		applyGeometryTransform(geometry, tempMatrix.makeScale(-1, 1, 1));
+		transformGeometryFrame(geometry, tempMatrix.makeScale(-1, 1, 1));
+		reflectGeometry(geometry);
 		transformNNClothWorldBasis(geometry, tempMatrix.makeRotationY(Math.PI / 2));
 		transformParallaxCardBasisV2(geometry, tempMatrix);
 		transformCurrentParallaxCardGeometry(geometry, tempMatrix);
@@ -1006,7 +1017,6 @@ export async function processGeometryForItem(
 		transformABSFXCurrentGeometry(geometry, tempMatrix);
 		transformJewelryMaskedGeometry(geometry, tempMatrix);
 		transformRockProjectionRawBasis(geometry, tempMatrix);
-		geometry.rotateY(Math.PI / 2);
 
 		transformNNClothWorldBasis(geometry, tempMatrix.makeRotationX(Math.PI / 2));
 		transformParallaxCardBasisV2(geometry, tempMatrix);
@@ -1020,17 +1030,16 @@ export async function processGeometryForItem(
 		transformABSFXCurrentGeometry(geometry, tempMatrix);
 		transformJewelryMaskedGeometry(geometry, tempMatrix);
 		transformRockProjectionRawBasis(geometry, tempMatrix);
-		geometry.rotateX(Math.PI / 2);
 
 		const waterCenters: Record<number, number[]> = {};
-		const waterFrame = new Matrix4()
+		const rootMatrix = new Matrix4()
 			.makeRotationX(Math.PI / 2)
 			.multiply(new Matrix4().makeRotationY(Math.PI / 2))
 			.multiply(new Matrix4().makeScale(-100, 100, 100))
 			.multiply(new Matrix4().makeTranslation(offset.y / 100, offset.z / 100, offset.x / 100));
 		allGeometries.forEach((source, materialIndex) => {
 			const center = source.userData.waterObjectCenter as Vector3 | undefined;
-			if (center) waterCenters[materialIndex] = center.clone().applyMatrix4(waterFrame).toArray();
+			if (center) waterCenters[materialIndex] = center.clone().applyMatrix4(rootMatrix).toArray();
 		});
 		if (Object.keys(waterCenters).length) geometry.userData.waterObjectCenters = waterCenters;
 		mergeWaterFxDomains(
@@ -1073,7 +1082,7 @@ export async function processGeometryForItem(
 			if (frame)
 				nnclothBoundsFrames[materialIndex] = {
 					...frame,
-					nativeToGeometry: waterFrame
+					nativeToGeometry: rootMatrix
 						.clone()
 						.multiply(new Matrix4().fromArray(frame.nativeToGeometry))
 						.toArray(),
@@ -1082,7 +1091,8 @@ export async function processGeometryForItem(
 		if (Object.keys(nnclothBoundsFrames).length)
 			geometry.userData.nnclothBoundsFrames = nnclothBoundsFrames;
 
-		geometry.computeBoundingBox();
+		await prepareGeometryBuffers([geometry], [rootMatrix], processing, true);
+		if (!geometry.boundingBox || !processing) geometry.computeBoundingBox();
 
 		const boundingBox = geometry.boundingBox!.clone();
 
