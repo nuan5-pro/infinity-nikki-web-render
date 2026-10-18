@@ -85,6 +85,16 @@ export class AssetLeaseCache<T> {
 		entry.value = undefined;
 	}
 
+	/** Loaded values, including idle entries retained for reuse. */
+	*values(): IterableIterator<T> {
+		for (const entry of this.entries.values()) if (entry.value !== undefined) yield entry.value;
+	}
+
+	get hasUnused(): boolean {
+		for (const entry of this.entries.values()) if (!entry.refs) return true;
+		return false;
+	}
+
 	clear(): void {
 		for (const [key, entry] of this.entries) this.retire(key, entry);
 	}

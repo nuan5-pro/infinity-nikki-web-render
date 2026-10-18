@@ -38,6 +38,11 @@ export class FurnitureResourceCache {
 	readonly pixels = new AssetLeaseCache<ImagePixels>(() => {});
 	readonly pixelDecoder = new ImagePixelDecoder();
 
+	get hasUnused(): boolean {
+		// Decoded sources retire with their final lease; only encoded data stays idle.
+		return this.binaries.hasUnused || this.members.hasUnused;
+	}
+
 	clearUnused(): void {
 		this.paperArrays.clearUnused();
 		this.images.clearUnused();

@@ -509,6 +509,17 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 			return (state?.batches.get(id)?.asset ?? state?.idle.get(id)?.asset ?? loaded.get(id))?.data.boundingBox.clone();
 		},
 
+		/** Cached furniture types/materials and renderer-wide linked programs; counts, not bytes. */
+		getResourceStats() {
+			const stats = state?.store.getResourceStats() ?? { models: 0, materials: 0, canClearCache: false };
+			const unusedPreloads = [...preloads.keys()].some(id => !state?.batches.has(id));
+			return {
+				...stats,
+				canClearCache: stats.canClearCache || unusedPreloads || cache.hasUnused,
+				shaders: context.renderer.info.programs?.length ?? 0,
+			};
+		},
+
 		clearUnused() {
 			alive();
 			releasePreloads();

@@ -1,4 +1,4 @@
-import type { WebGLRenderer } from 'three';
+import type { Material, WebGLRenderer } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { AssetLeaseCache, type AssetLease } from '../resources/leaseCache.js';
@@ -33,6 +33,10 @@ export class FurnitureAssetCache {
 	readonly models = new AssetLeaseCache<ModelAssetData>((asset) => asset.dispose(), true);
 	private decoders = new Map<string, { loader: GLTFLoader; draco: DRACOLoader; pending: number }>();
 	private disposed = false;
+
+	get hasUnused(): boolean {
+		return this.models.hasUnused || this.resources.hasUnused;
+	}
 
 	clearUnused(): void {
 		this.models.clearUnused();
@@ -210,6 +214,17 @@ export class FurnitureAssetStore {
 				throw error;
 			}
 		}));
+	}
+
+	getResourceStats() {
+		let models = 0;
+		const materials = new Set<Material>();
+		for (const asset of this.furniture.values()) {
+			models++;
+			const merged = asset.data.mergedMaterial;
+			for (const material of Array.isArray(merged) ? merged : [merged]) materials.add(material);
+		}
+		return { models, materials: materials.size, canClearCache: this.furniture.hasUnused };
 	}
 
 	clearUnused(): void { this.furniture.clearUnused(); }
