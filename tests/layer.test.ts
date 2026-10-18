@@ -3,7 +3,11 @@ import { Box3, BoxGeometry, Matrix4, MeshBasicMaterial, Scene, Vector3 } from 't
 import type { FurnitureModelConfig } from '../src/furniture/types.js';
 import type { RenderContext } from '../src/runtime/context.js';
 
-const deferred = vi.hoisted(() => ({ prepare: undefined as undefined | (() => Promise<boolean>) }));
+const deferred = vi.hoisted(() => ({
+	prepare: undefined as undefined | (() => Promise<boolean>),
+	load: undefined as undefined | ((id: number) => Promise<void>),
+	release: vi.fn(),
+}));
 vi.mock('../src/furniture/assetStore.js', () => ({
 	FurnitureAssetCache: class {
 		dispose() {}
@@ -17,10 +21,10 @@ vi.mock('../src/furniture/assetStore.js', () => ({
 		constructor(_catalog: unknown, configs: Map<number, FurnitureModelConfig>) { this.configs = configs; }
 
 		acquire(id: number) {
-			return { ready: Promise.resolve({ config: this.configs.get(id)!, data: {
+			return { ready: (deferred.load?.(id) ?? Promise.resolve()).then(() => ({ config: this.configs.get(id)!, data: {
 				geometry: this.geometry, mergedMaterial: this.material, plainMaterials: [this.material],
 				boundingBox: new Box3(new Vector3(-.5, -.5, -.5), new Vector3(.5, .5, .5)),
-			} }), release: vi.fn() };
+			} })), release: vi.fn(() => deferred.release(id)) };
 		}
 
 		dispose() {
@@ -57,6 +61,8 @@ function context() {
 afterEach(() => {
 	vi.unstubAllGlobals();
 	deferred.prepare = undefined;
+	deferred.load = undefined;
+	deferred.release.mockClear();
 });
 
 it('updates and removes individual slots without replacing untouched batches', async () => {
@@ -268,5 +274,132 @@ it('uploads the full color reset when a cached batch has pending partial color u
 	// A later single-instance edit must not hide the reset of the other slots.
 	colors.addUpdateRange(0, 3);
 	expect(colors.updateRanges).toContainEqual({ start: 0, count: colors.array.length });
+	layer.dispose();
+});
+
+it.each(['replace', 'preload'])('prepares a ready asset while another is still loading (%s)', async (operation) => {
+	const data = structuredClone(manifest);
+	data.furniture.push({ ...data.furniture[0]!, id: 2 });
+	vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => data }));
+	let finishLoad!: () => void;
+	const slow = new Promise<void>(resolve => { finishLoad = resolve; });
+	deferred.load = id => id === 1170000002 ? slow : Promise.resolve();
+	const render = context();
+	const prepare = vi.spyOn(render, 'prepare');
+	const layer = createFurnitureLayer(render, { decoderPath: '/draco/' });
+	await layer.setup('/assets/');
+	const items = [1, 2].map(id => ({ id: String(id), assetId: 1170000000 + id, matrix: new Matrix4() }));
+	const progress: Array<{ phase: string; completed: number }> = [];
+	const task = { onProgress: (value: { phase: string; completed: number }) => { progress.push(value); } };
+	const pending = operation === 'replace' ? layer.replaceAll(items, task) : layer.load(items.map(item => item.assetId), task);
+	await vi.waitFor(() => expect(progress).toContainEqual(expect.objectContaining({ phase: 'preparing', completed: 1 })));
+	expect(prepare).toHaveBeenCalledTimes(1);
+	expect(layer.root.children).toHaveLength(0);
+	expect(layer.getInstance('1')).toBeUndefined();
+	const warmed = prepare.mock.calls[0]![0];
+	finishLoad();
+	await pending;
+	expect(progress.map(value => `${value.phase}:${value.completed}`).slice(0, 4)).toEqual([
+		'loading:1', 'preparing:1', 'loading:2', 'preparing:2',
+	]);
+	if (operation === 'preload') {
+		expect(layer.root.children).toHaveLength(0);
+		await layer.load(items.map(item => item.assetId));
+		expect(prepare).toHaveBeenCalledTimes(2);
+		await layer.replaceAll(items);
+	}
+	expect(layer.getInstance('1')!.mesh).toBe(warmed);
+	expect(layer.root.children).toHaveLength(2);
+	layer.dispose();
+});
+
+it('bounds concurrent preload preparation and cancels queued work before admission', async () => {
+	const data = structuredClone(manifest);
+	data.furniture = Array.from({ length: 20 }, (_, index) => ({ ...data.furniture[0]!, id: index + 1 }));
+	vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => data }));
+	const finishes: Array<(ready: boolean) => void> = [];
+	deferred.prepare = () => new Promise(resolve => { finishes.push(resolve); });
+	const layer = createFurnitureLayer(context(), { decoderPath: '/draco/' });
+	await layer.setup('/assets/');
+	const controller = new AbortController();
+	const pending = layer.load(data.furniture.map(item => 1170000000 + item.id), { signal: controller.signal });
+	const rejected = expect(pending).rejects.toThrow('cancelled');
+	await vi.waitFor(() => expect(finishes).toHaveLength(16));
+	finishes[0]!(true);
+	await vi.waitFor(() => expect(finishes).toHaveLength(17));
+	controller.abort();
+	finishes.slice(1).forEach(finish => finish(false));
+	await rejected;
+	expect(finishes).toHaveLength(17);
+	expect(layer.root.children).toHaveLength(0);
+	layer.clearUnused();
+	layer.dispose();
+});
+
+it.each(['loading', 'preparing'])('rejects a preload cancelled by its %s progress callback', async (phase) => {
+	vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => manifest }));
+	const layer = createFurnitureLayer(context(), { decoderPath: '/draco/' });
+	await layer.setup('/assets/');
+	const controller = new AbortController();
+	await expect(layer.load([1170000001], {
+		signal: controller.signal,
+		onProgress: progress => { if (progress.phase === phase) controller.abort(new Error('stop preload')); },
+	})).rejects.toThrow('stop preload');
+	layer.clearUnused();
+	layer.dispose();
+});
+
+it('keeps preloads alive during cache eviction until GPU cancellation has drained', async () => {
+	vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => manifest }));
+	let finish!: (ready: boolean) => void;
+	deferred.prepare = () => new Promise(resolve => { finish = resolve; });
+	const render = context();
+	const prepare = vi.spyOn(render, 'prepare');
+	const layer = createFurnitureLayer(render, { decoderPath: '/draco/' });
+	await layer.setup('/assets/');
+	const controller = new AbortController();
+	const loading = layer.load([1170000001], { signal: controller.signal });
+	const rejected = expect(loading).rejects.toThrow('cancelled');
+	await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+	const dispose = vi.spyOn(prepare.mock.calls[0]![0], 'dispose');
+	layer.clearUnused();
+	expect(dispose).not.toHaveBeenCalled();
+	expect(deferred.release).not.toHaveBeenCalled();
+	controller.abort();
+	layer.clearUnused();
+	expect(dispose).not.toHaveBeenCalled();
+	expect(deferred.release).not.toHaveBeenCalled();
+	finish(false);
+	await rejected;
+	expect(deferred.release).toHaveBeenCalledWith(1170000001);
+	layer.clearUnused();
+	expect(dispose).toHaveBeenCalledOnce();
+	layer.dispose();
+});
+
+it('retains a shared preload while an earlier caller is still preparing it', async () => {
+	vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => manifest }));
+	const finishes: Array<(ready: boolean) => void> = [];
+	deferred.prepare = () => new Promise(resolve => { finishes.push(resolve); });
+	const render = context();
+	const prepare = vi.spyOn(render, 'prepare');
+	const layer = createFurnitureLayer(render, { decoderPath: '/draco/' });
+	await layer.setup('/assets/');
+	const first = layer.load([1170000001]);
+	await vi.waitFor(() => expect(finishes).toHaveLength(1));
+	const second = layer.load([1170000001]);
+	await vi.waitFor(() => expect(finishes).toHaveLength(2));
+	const mesh = prepare.mock.calls[0]![0];
+	expect(prepare.mock.calls[1]![0]).toBe(mesh);
+	const dispose = vi.spyOn(mesh, 'dispose');
+	finishes[1]!(true);
+	await second;
+	layer.clearUnused();
+	expect(dispose).not.toHaveBeenCalled();
+	expect(deferred.release).not.toHaveBeenCalled();
+	finishes[0]!(true);
+	await first;
+	layer.clearUnused();
+	expect(dispose).toHaveBeenCalledOnce();
 	layer.dispose();
 });

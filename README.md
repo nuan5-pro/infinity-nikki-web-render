@@ -45,7 +45,7 @@ await furniture.setup('/assets/furniture/')
 await furniture.load([1170000315])
 ```
 
-`setup(resourceRoot)` 初始化一次，加载 schema 5 的 `manifest.json` 及其相对路径资源。`decoderPath` 是独立的 Draco 解码器目录 URL。`load(assetIds)` 可选，用于预载模型。
+`setup(resourceRoot)` 初始化一次，加载 schema 5 的 `manifest.json` 及其相对路径资源。`decoderPath` 是独立的 Draco 解码器目录 URL。`load(assetIds)` 可选，用于预载模型并准备 GPU 资源；就绪的空批次会保留供后续实例复用。
 
 ### 实例编辑
 
@@ -123,7 +123,7 @@ await furniture.replaceAll(instances, {
 })
 ```
 
-进度阶段为 `'loading'`、`'preparing'` 或 `'ready'`，按操作报告。调用 `controller.abort()` 取消任务，调用方处理 Promise rejection。整体替换及档位切换在准备完成后提交；新的整体替换会使旧任务失效。
+进度阶段为 `'loading'`、`'preparing'` 或 `'ready'`，按操作报告。加载与 GPU 准备并行推进，前两类进度分别累计，回调可能交错；`ready` 在实例提交后报告。调用 `controller.abort()` 取消任务，调用方处理 Promise rejection。整体替换及档位切换在准备完成后提交；新的整体替换会使旧任务失效。
 
 ## 资源释放
 
