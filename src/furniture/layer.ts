@@ -93,8 +93,7 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 	}
 
 	function changed() {
-		context.renderer.shadowMap.needsUpdate = true;
-		context.invalidate();
+		context.invalidateShadows();
 	}
 
 	function destroy(value: State | undefined, keepStore = false) {

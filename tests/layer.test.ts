@@ -47,6 +47,7 @@ const manifest = { schemaVersion: 5, defaults: {
 function context() {
 	return { scene: new Scene(), renderer: { shadowMap: {}, capabilities: { maxTextureSize: 4096 } },
 		invalidate: vi.fn(),
+		invalidateShadows: vi.fn(),
 
 		onBeforeRender: () => () => {},
 
@@ -70,16 +71,23 @@ it('updates and removes individual slots without replacing untouched batches', a
 
 		json: async () => manifest }));
 
-	const layer = createFurnitureLayer(context(), { decoderPath: '/draco/' });
+	const render = context();
+	const layer = createFurnitureLayer(render, { decoderPath: '/draco/' });
 	await layer.setup('/assets/');
 	await layer.replaceAll(Array.from({ length: 1000 }, (_, index) => ({
 		id: String(index), assetId: 1170000001, matrix: new Matrix4().makeTranslation(index, 0, 0),
 	})));
 
 	const mesh = layer.getInstance('0')!.mesh;
+	vi.mocked(render.invalidateShadows).mockClear();
 	layer.updateMatrices([{ id: '400', matrix: new Matrix4().makeTranslation(2000, 0, 0) }]);
+	expect(render.invalidateShadows).toHaveBeenCalledOnce();
+	vi.mocked(render.invalidateShadows).mockClear();
 	layer.updateDyes([{ id: '400', values: [26, 158] }]);
+	expect(render.invalidateShadows).toHaveBeenCalledOnce();
+	vi.mocked(render.invalidateShadows).mockClear();
 	layer.remove(['400']);
+	expect(render.invalidateShadows).toHaveBeenCalledOnce();
 	expect(layer.getInstance('999')?.index).toBe(400);
 	expect(layer.getInstance('400')).toBeUndefined();
 	expect(layer.getInstance('0')?.mesh).toBe(mesh);

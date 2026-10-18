@@ -81,6 +81,10 @@ export function createRenderContext(options: RenderContextOptions) {
 			return true;
 		},
 		invalidate: options.invalidate,
+		invalidateShadows() {
+			renderer.shadowMap.needsUpdate = true;
+			options.invalidate();
+		},
 
 		onBeforeRender(callback: () => void) {
 			if (disposed) throw new Error('Render context disposed');
@@ -104,7 +108,7 @@ export function createRenderContext(options: RenderContextOptions) {
 			prepareUniformArrayCache(renderer);
 
 			const camera = options.getCamera();
-			if (camera) updateShadows(renderer, scene, camera);
+			if (camera) updateShadows(renderer, camera);
 		},
 
 		dispose() {
