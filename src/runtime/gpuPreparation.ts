@@ -39,6 +39,7 @@ export interface GpuPreparationOptions {
 	invalidate: () => void;
 	budgetMs?: number;
 	maxCompiles?: number;
+	maxInFlight?: number;
 	maxUploads?: number;
 	uploadBytes?: number;
 	clock?: () => number;
@@ -141,7 +142,8 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 	};
 
 	const budget = () => !disposed && !lost && spent < (options.budgetMs ?? 3);
-	const canSubmit = () => budget() && submissions < (options.maxCompiles ?? 4) && compiling.size < 8;
+	const hasSlot = () => compiling.size < (options.maxInFlight ?? 8);
+	const canSubmit = () => budget() && submissions < (options.maxCompiles ?? 4) && hasSlot();
 
 	const measured = <T>(kind: 'compileCpuMs' | 'uploadCpuMs', action: () => T) => {
 		const start = clock();
@@ -458,7 +460,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 			refreshTextures(previous);
 			if (!previous.ready) return false;
 			if (texturesReady(previous)) return dependenciesReady;
-			if (!budget() || compiling.has(material) || compiling.size >= 8) return false;
+			if (!budget() || compiling.has(material) || !hasSlot()) return false;
 
 			previous.ready = false;
 			pending.add(previous);

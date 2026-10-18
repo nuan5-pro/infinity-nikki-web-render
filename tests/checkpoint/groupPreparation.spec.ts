@@ -138,13 +138,11 @@ describe('candidate preparation handoff', () => {
 		const state = setupPipeline([20, 20, 20], () => false);
 		try {
 			await state.frame();
-			expect(vi.mocked(state.renderer.compile).mock.calls.map(([mesh]) => (mesh as InstancedMesh).material)).toEqual([
-				state.materials[0]![0], state.materials[1]![0], state.materials[2]![0],
-				state.materials[0]![1], state.materials[1]![1], state.materials[2]![1],
-				state.materials[0]![2], state.materials[1]![2],
-			]);
+			expect(vi.mocked(state.renderer.compile).mock.calls.map(([mesh]) => (mesh as InstancedMesh).material)).toEqual(
+				Array.from({ length: 32 }, (_, index) => state.materials[index % 3]![Math.floor(index / 3)]),
+			);
 			for (let i = 0; i < 3; i++) await state.frame();
-			expect(state.renderer.compile).toHaveBeenCalledTimes(8);
+			expect(state.renderer.compile).toHaveBeenCalledTimes(32);
 			expect(state.renderer.compileAsync).not.toHaveBeenCalled();
 		} finally {
 			state.dispose();
@@ -202,17 +200,17 @@ describe('candidate preparation handoff', () => {
 	});
 
 	it('hands off cached candidates even while all compilation slots are occupied', async () => {
-		const state = setupPipeline([1, 8], (material) => material === cached);
+		const state = setupPipeline([1, 32], (material) => material === cached);
 		const cached = state.materials[0]![0]!;
 		try {
 			for (let i = 0; i < 3; i++) await state.frame();
 			expect(await state.results[0]).toBe(true);
-			expect(state.renderer.compile).toHaveBeenCalledTimes(9);
+			expect(state.renderer.compile).toHaveBeenCalledTimes(33);
 			const progress = vi.fn();
 			const ready = state.preparation.prepareScene(() => false, progress);
 			await state.frame();
 			expect(progress.mock.calls).toEqual([[0, 2], [1, 2]]);
-			expect(state.renderer.compile).toHaveBeenCalledTimes(9);
+			expect(state.renderer.compile).toHaveBeenCalledTimes(33);
 			state.dispose();
 			expect(await ready).toBe(false);
 		} finally {
@@ -300,7 +298,7 @@ describe('candidate preparation handoff', () => {
 
 		const preparation = createGroupPreparation(renderer, () => ({ scene, camera }), () => {});
 		const meshes = Array.from({ length: 3 }, () => {
-			const map = new Texture({ width: 2048, height: 1024 });
+			const map = new Texture({ width: 4096, height: 4096 });
 			return new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ map }), 1);
 		});
 		scene.add(...meshes);
@@ -318,7 +316,7 @@ describe('candidate preparation handoff', () => {
 				callbacks[0]!(frame * 16);
 				await Promise.resolve();
 				await Promise.resolve();
-				expect(vi.mocked(renderer.compile).mock.calls.length - compiles).toBeLessThanOrEqual(8);
+				expect(vi.mocked(renderer.compile).mock.calls.length - compiles).toBeLessThanOrEqual(32);
 				expect(vi.mocked(renderer.initTexture).mock.calls.length - uploads).toBeLessThanOrEqual(1);
 				expect(scan.mock.calls.length - scans).toBe(1);
 			}

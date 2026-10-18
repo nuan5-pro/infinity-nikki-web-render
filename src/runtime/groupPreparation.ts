@@ -9,13 +9,15 @@ export function createGroupPreparation(
 	invalidate: () => void,
 ) {
 	const budgetMs = 6;
-	const windowSize = 8;
+	const windowSize = 32;
 	// Shared-source texture clones can initialize without uploading. Bound work
 	// by CPU time and bytes instead of spending a whole frame per texture wrapper.
 	const queue = createGpuPreparation(renderer, {
 		invalidate,
 		maxCompiles: windowSize,
+		maxInFlight: windowSize,
 		maxUploads: Infinity,
+		uploadBytes: 64 * 1024 * 1024,
 		budgetMs,
 	});
 
