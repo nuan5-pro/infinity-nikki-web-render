@@ -9,6 +9,7 @@ import {
 } from 'three';
 import {
 	finalizeMaterial,
+	materialBindingRevision,
 	materialDependencies,
 	materialNeedsFinalization,
 } from './materialPreparation.js';
@@ -23,11 +24,14 @@ type Job = {
 	generation: number;
 	cancelled: boolean;
 	ready: boolean;
+	committed: boolean;
 	compile: Material['onBeforeCompile'];
 	sourceKey: string;
 	failed: boolean;
 	programs: Program[];
 	textures: Texture[];
+	uniforms?: Record<string, { value: unknown }>;
+	bindingRevision: number;
 	commit: () => Promise<unknown>;
 };
 
@@ -107,7 +111,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 	const readyPrograms = new WeakSet<WebGLProgram>();
 
 	const pending = new Set<Job>();
-	const compiling = new Set<Material>();
+	const compiling = new Map<Material, Job>();
 
 	let generation = 0;
 	let disposed = false;
@@ -137,6 +141,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 	};
 
 	const budget = () => !disposed && !lost && spent < (options.budgetMs ?? 3);
+	const canSubmit = () => budget() && submissions < (options.maxCompiles ?? 4) && compiling.size < 8;
 
 	const measured = <T>(kind: 'compileCpuMs' | 'uploadCpuMs', action: () => T) => {
 		const start = clock();
@@ -156,8 +161,10 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 		job.cancelled = true;
 		if (!job.ready) stats.cancelled++;
 		pending.delete(job);
-		compiling.delete(job.material);
+		if (compiling.get(job.material) === job) compiling.delete(job.material);
 		job.programs = [];
+		job.textures = [];
+		job.uniforms = undefined;
 	}
 
 	function reset() {
@@ -196,6 +203,37 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 
 		texture.addEventListener('dispose', release);
 		textureReleases.set(texture, release);
+	}
+
+	function refreshTextures(job: Job) {
+		const revision = materialBindingRevision(job.material);
+		if (job.bindingRevision === revision) return;
+
+		job.textures = collectTextures(job.material, job.uniforms);
+		job.bindingRevision = revision;
+		job.textures.forEach(watchTexture);
+	}
+
+	function texturesReady(job: Job) {
+		return job.bindingRevision === materialBindingRevision(job.material) && job.textures.every((texture) => {
+			const upload = uploads.get(texture);
+			return upload?.generation === generation && upload.version === texture.version;
+		});
+	}
+
+	function valid(job: Job) {
+		return !disposed && !lost && !job.cancelled && job.generation === generation &&
+			job.compile === job.material.onBeforeCompile && job.sourceKey === job.material.customProgramCacheKey();
+	}
+
+	function completeJob(job: Job) {
+		if (compiling.get(job.material) === job) compiling.delete(job.material);
+		pending.delete(job);
+		job.ready = true;
+		job.programs = [];
+		stats.completed++;
+		stats.lastReadyAt = clock();
+		options.invalidate();
 	}
 
 	function getSceneState(scene: Scene, camera: Camera) {
@@ -257,12 +295,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 				job.sourceKey !== material.customProgramCacheKey()
 			) return false;
 
-			return (
-				job.textures.every((texture) => {
-					const upload = uploads.get(texture);
-					return upload?.generation === generation && upload.version === texture.version;
-				}) && materialDependencies(material).every(ready)
-			);
+			return texturesReady(job) && materialDependencies(material).every(ready);
 		};
 
 		return materials.every(ready);
@@ -288,14 +321,13 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 
 		const gl = renderer.getContext();
 		const extension = gl.getExtension('KHR_parallel_shader_compile');
-		for (const job of pending) {
+		const count = pending.size;
+		for (let i = 0; i < count && pending.size; i++) {
 			if (!budget()) break;
-			if (
-				job.cancelled ||
-				job.generation !== generation ||
-				job.compile !== job.material.onBeforeCompile ||
-				job.sourceKey !== job.material.customProgramCacheKey()
-			) {
+			const job = pending.values().next().value!;
+			pending.delete(job);
+			pending.add(job);
+			if (!valid(job)) {
 				cancel(job);
 				continue;
 			}
@@ -326,6 +358,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 			}
 			if (!complete) continue;
 
+			refreshTextures(job);
 			for (const texture of job.textures) {
 				watchTexture(texture);
 
@@ -351,26 +384,34 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 
 			if (!complete) continue;
 			pending.delete(job);
+			if (job.committed) {
+				completeJob(job);
+				continue;
+			}
 			// All programs are now complete. compileAsync performs the renderer's
 			// normal readiness check without leaving uncancellable polling timers.
 			measured('compileCpuMs', () => job.commit())
 				.then(() => {
-					compiling.delete(job.material);
-					if (
-						disposed ||
-						job.cancelled ||
-						job.generation !== generation ||
-						job.compile !== job.material.onBeforeCompile ||
-						job.sourceKey !== job.material.customProgramCacheKey()
-					) return;
+					if (!valid(job)) {
+						cancel(job);
+						return;
+					}
 
-					job.ready = true;
+					job.committed = true;
 					job.programs = [];
-					stats.completed++;
-					stats.lastReadyAt = clock();
-					options.invalidate();
+					refreshTextures(job);
+					if (texturesReady(job)) completeJob(job);
+					else {
+						pending.add(job);
+						options.invalidate();
+					}
 				})
 				.catch((error) => {
+					if (!valid(job)) {
+						cancel(job);
+						return;
+					}
+
 					job.failed = true;
 					stats.errors++;
 					cancel(job);
@@ -385,19 +426,20 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 		if (disposed || lost) return false;
 
 		watch(material);
-		if (materialNeedsFinalization(material, renderer, scene) && !budget()) return false;
-
-		const materials = Array.isArray(object.material) ? object.material : null;
-		const group = materials
-			? (object.geometry?.groups.find((group) => materials.indexOf(material) === group.materialIndex) ?? null)
-			: null;
-		if (object.geometry && materialNeedsFinalization(material, renderer, scene))
-			measured('compileCpuMs', () => finalizeMaterial(material, renderer, scene, camera, object.geometry!, object, group));
+		if (materialNeedsFinalization(material, renderer, scene)) {
+			if (!budget()) return false;
+			if (object.geometry) {
+				const index = Array.isArray(object.material) ? object.material.indexOf(material) : -1;
+				const group = object.geometry.groups.find((group) => group.materialIndex === index) ?? null;
+				measured('compileCpuMs', () => finalizeMaterial(material, renderer, scene, camera, object.geometry!, object, group));
+			}
+		}
 
 		if (material.customProgramCacheKey().includes('awaiting-')) return false;
 
+		let dependenciesReady = true;
 		for (const dependency of materialDependencies(material))
-			if (!ensure(object, dependency, scene, camera)) return false;
+			if (!ensure(object, dependency, scene, camera)) dependenciesReady = false;
 
 		const target = renderer.getRenderTarget();
 		const key = jobKey(object, material);
@@ -413,20 +455,20 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 			cancel(previous);
 
 		if (previous && !previous.cancelled) {
+			refreshTextures(previous);
 			if (!previous.ready) return false;
-			if (previous.textures.every((texture) => uploads.get(texture)?.version === texture.version)) return true;
+			if (texturesReady(previous)) return dependenciesReady;
+			if (!budget() || compiling.has(material) || compiling.size >= 8) return false;
 
 			previous.ready = false;
 			pending.add(previous);
-			compiling.add(material);
+			compiling.set(material, previous);
 			return false;
 		}
 
 		if (
-			!budget() ||
-			compiling.has(material) ||
-			submissions >= (options.maxCompiles ?? 4) ||
-			compiling.size >= 8
+			!canSubmit() ||
+			compiling.has(material)
 		) return false;
 		// Borrow geometry/instance state without allocating a duplicate instance
 		// buffer or changing the object in the user's scene during compilation.
@@ -478,11 +520,14 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 			generation,
 			cancelled: false,
 			ready: false,
+			committed: false,
 			failed: false,
 			compile: material.onBeforeCompile,
 			sourceKey: material.customProgramCacheKey(),
 			programs: [...properties.programs.values()],
 			textures: collectTextures(material, properties.uniforms),
+			uniforms: properties.uniforms,
+			bindingRevision: materialBindingRevision(material),
 
 			commit: () =>
 				scoped(() =>
@@ -495,7 +540,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 		job.textures.forEach(watchTexture);
 		variants.set(key, job);
 		pending.add(job);
-		compiling.add(material);
+		compiling.set(material, job);
 		submissions++;
 		stats.submitted++;
 		options.invalidate();

@@ -2,7 +2,7 @@ import { ShaderChunk, Texture, type Material, type IUniform } from 'three';
 import { CustomDataBuffer, paperCustomDataVertex, paperCustomDataFragment } from './customData.js';
 import { readFurnitureSurface } from '../materials/surface/surfaceShader.js';
 import { readFurnitureSurfaceExtra } from '../materials/surface/surfaceExtraShader.js';
-import { materialDependencies } from '../runtime/materialPreparation.js';
+import { invalidateMaterialBindings, materialDependencies } from '../runtime/materialPreparation.js';
 
 type Shader = Parameters<Material['onBeforeCompile']>[0];
 
@@ -133,6 +133,9 @@ export function bindPaperMaterial(material: Material, buffer: CustomDataBuffer):
 	const owner = owners.get(material);
 	if (!owner) return;
 
-	owner.texture.value = buffer.texture;
+	if (owner.texture.value !== buffer.texture) {
+		owner.texture.value = buffer.texture;
+		invalidateMaterialBindings(material);
+	}
 	owner.stride.value = buffer.stride;
 }

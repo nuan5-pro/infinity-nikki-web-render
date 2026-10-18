@@ -5,7 +5,10 @@ import type { RenderContext } from '../src/runtime/context.js';
 
 const deferred = vi.hoisted(() => ({ prepare: undefined as undefined | (() => Promise<boolean>) }));
 vi.mock('../src/furniture/assetStore.js', () => ({
-	FurnitureAssetCache: class { dispose() {} },
+	FurnitureAssetCache: class {
+		dispose() {}
+		clearUnused() {}
+	},
 	FurnitureAssetStore: class {
 		configs: Map<number, FurnitureModelConfig>;
 		geometry = new BoxGeometry();
@@ -24,6 +27,8 @@ vi.mock('../src/furniture/assetStore.js', () => ({
 			this.geometry.dispose();
 			this.material.dispose();
 		}
+
+		clearUnused() {}
 	},
 }));
 import { createFurnitureLayer } from '../src/furniture/layer.js';
@@ -179,5 +184,89 @@ it('preserves live batches when preparation progress cancels an upsert', async (
 	expect(layer.getInstance('old')!.mesh).toBe(before.mesh);
 	expect(layer.getInstance('new')).toBeUndefined();
 	expect(layer.batches.size).toBe(1);
+	layer.dispose();
+});
+
+it('reuses empty batches and shadow materials across scheme switches until cache eviction', async () => {
+	const data = structuredClone(manifest);
+	data.furniture.push({ ...data.furniture[0]!, id: 2 });
+	vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => data }));
+	const layer = createFurnitureLayer(context(), { decoderPath: '/draco/' });
+	await layer.setup('/assets/');
+	await layer.replaceAll([{ id: 'a', assetId: 1170000001, matrix: new Matrix4().makeTranslation(1000, 0, 0) }]);
+	const mesh = layer.getInstance('a')!.mesh;
+	const depth = mesh.customDepthMaterial!;
+	const released = vi.fn();
+	depth.addEventListener('dispose', released);
+
+	layer.remove(['a']);
+	expect(layer.batches.size).toBe(0);
+	expect(mesh.parent).toBeNull();
+	expect(mesh.count).toBe(0);
+	expect(released).not.toHaveBeenCalled();
+	await layer.replaceAll([{ id: 'b', assetId: 1170000002, matrix: new Matrix4() }]);
+	layer.remove(['b']);
+	await layer.replaceAll([{ id: 'a2', assetId: 1170000001, matrix: new Matrix4().makeTranslation(-10, 0, 0), customData: [26, 158] }]);
+
+	expect(layer.getInstance('a2')!.mesh).toBe(mesh);
+	expect(mesh.customDepthMaterial).toBe(depth);
+	expect(mesh.boundingBox!.max.x).toBeCloseTo(-9.5);
+	expect(layer.getInstance('a')).toBeUndefined();
+	expect(layer.getInstance('b')).toBeUndefined();
+	expect(released).not.toHaveBeenCalled();
+
+	layer.remove(['a2']);
+	layer.clearUnused();
+	expect(released).toHaveBeenCalledOnce();
+	await layer.replaceAll([{ id: 'a3', assetId: 1170000001, matrix: new Matrix4() }]);
+	expect(layer.getInstance('a3')!.mesh).not.toBe(mesh);
+	layer.dispose();
+});
+
+it('settles every queued preparation before releasing a failed candidate', async () => {
+	const data = structuredClone(manifest);
+	data.furniture.push({ ...data.furniture[0]!, id: 2 });
+	vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => data }));
+	const finishes: Array<(ready: boolean) => void> = [];
+	deferred.prepare = () => new Promise(resolve => { finishes.push(resolve); });
+	const layer = createFurnitureLayer(context(), { decoderPath: '/draco/' });
+	await layer.setup('/assets/');
+	const controller = new AbortController();
+	let settled = false;
+	const pending = layer.replaceAll([
+		{ id: 'a', assetId: 1170000001, matrix: new Matrix4() },
+		{ id: 'b', assetId: 1170000002, matrix: new Matrix4() },
+	], { signal: controller.signal });
+	void pending.then(() => { settled = true; }, () => { settled = true; });
+	await vi.waitFor(() => expect(finishes).toHaveLength(2));
+	controller.abort();
+	finishes[0]!(false);
+	await Promise.resolve();
+	await Promise.resolve();
+	expect(settled).toBe(false);
+	finishes[1]!(false);
+	await expect(pending).rejects.toThrow();
+	expect(layer.batches.size).toBe(0);
+	layer.dispose();
+});
+
+it('uploads the full color reset when a cached batch has pending partial color updates', async () => {
+	vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => manifest }));
+	const layer = createFurnitureLayer(context(), { decoderPath: '/draco/' });
+	await layer.setup('/assets/');
+	await layer.replaceAll(['a', 'b'].map(id => ({ id, assetId: 1170000001, matrix: new Matrix4() })));
+	const mesh = layer.getInstance('a')!.mesh;
+	const colors = mesh.instanceColor!;
+	colors.array.fill(0.25);
+	colors.addUpdateRange(0, 3);
+	colors.needsUpdate = true;
+
+	layer.remove(['a', 'b']);
+	await layer.replaceAll(['c', 'd'].map(id => ({ id, assetId: 1170000001, matrix: new Matrix4() })));
+	expect(layer.getInstance('c')!.mesh).toBe(mesh);
+	expect(colors.array.every(value => value === 1)).toBe(true);
+	// A later single-instance edit must not hide the reset of the other slots.
+	colors.addUpdateRange(0, 3);
+	expect(colors.updateRanges).toContainEqual({ start: 0, count: colors.array.length });
 	layer.dispose();
 });

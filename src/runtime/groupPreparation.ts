@@ -8,18 +8,24 @@ export function createGroupPreparation(
 	context: () => { scene: Scene; camera: Camera | undefined },
 	invalidate: () => void,
 ) {
+	const budgetMs = 6;
+	const windowSize = 8;
 	// Shared-source texture clones can initialize without uploading. Bound work
 	// by CPU time and bytes instead of spending a whole frame per texture wrapper.
 	const queue = createGpuPreparation(renderer, {
 		invalidate,
-		maxCompiles: 2,
+		maxCompiles: windowSize,
 		maxUploads: Infinity,
-		budgetMs: 3,
+		budgetMs,
 	});
 
 	type Candidate = {
 		mesh: Mesh;
 		materials: Material[];
+		next: number;
+		active: Set<Material>;
+		frame: number;
+		checks: number;
 		stale: () => boolean;
 		resolve: (ready: boolean) => void;
 		reject: (error: unknown) => void;
@@ -29,6 +35,7 @@ export function createGroupPreparation(
 	const users = new Map<Material, number>();
 	let disposed = false;
 	let frame: number | undefined;
+	let frameId = 0;
 
 	function finish(candidate: Candidate, ready: boolean, error?: unknown) {
 		if (!pending.delete(candidate)) return;
@@ -49,16 +56,25 @@ export function createGroupPreparation(
 		if (!disposed && pending.size && frame === undefined) frame = requestAnimationFrame(tick);
 	}
 
-	function enqueue(candidate: Candidate) {
-		pending.add(candidate);
+	function enqueue(candidate: Omit<Candidate, 'next' | 'active' | 'frame' | 'checks'>) {
+		const entry = { ...candidate, next: 0, active: new Set<Material>(), frame: -1, checks: 0 };
+		pending.add(entry);
 		for (const material of candidate.materials) users.set(material, (users.get(material) ?? 0) + 1);
 	}
 
 	function tick() {
 		frame = undefined;
-		for (const candidate of [...pending]) if (candidate.stale()) finish(candidate, false);
-
 		if (disposed || !pending.size) return;
+
+		// Cancellation must not wait behind the frame's GPU upload budget.
+		for (const candidate of pending) {
+			try {
+				if (candidate.stale()) finish(candidate, false);
+			} catch (error) {
+				finish(candidate, false, error);
+			}
+		}
+		if (!pending.size) return;
 
 		const target = renderer.getRenderTarget();
 		try {
@@ -75,27 +91,57 @@ export function createGroupPreparation(
 			// One budget reset, completion/upload drain and light scan per canvas frame.
 			const start = performance.now();
 			queue.beginFrame(scene, camera);
-			for (const candidate of [...pending]) {
-				if (performance.now() - start >= 3) break;
+			frameId++;
+			let idle = 0;
+			while (pending.size && idle < pending.size && performance.now() - start < budgetMs) {
+				const candidate = pending.values().next().value!;
+				pending.delete(candidate);
+				pending.add(candidate);
+				if (candidate.stale()) {
+					finish(candidate, false);
+					idle = 0;
+					continue;
+				}
+
 				try {
-					let ready = true;
-					for (const material of candidate.materials) {
-						if (!queue.ensure(candidate.mesh, material, scene, camera)) {
-							ready = false;
-							break;
-						}
+					let advanced = false;
+					// Poll only the unresolved window, once per frame. Completed prefixes
+					// stay out of the hot path while other materials compile in parallel.
+					if (candidate.frame !== frameId) {
+						candidate.frame = frameId;
+						candidate.checks = candidate.active.size;
 					}
 
-					if (!ready) {
-						pending.delete(candidate);
-						pending.add(candidate);
-						continue;
+					// One material per turn keeps admission and polling fair. Cached
+					// materials can still advance when compilation slots are occupied.
+					let material: Material | undefined;
+					if (candidate.checks) {
+						material = candidate.active.values().next().value!;
+						candidate.active.delete(material);
+						candidate.checks--;
+					} else if (candidate.next < candidate.materials.length && candidate.active.size < windowSize)
+						material = candidate.materials[candidate.next++]!;
+
+					if (material) {
+						if (!queue.ensure(candidate.mesh, material, scene, camera)) candidate.active.add(material);
+						advanced = true;
 					}
-					renderer.shadowMap.needsUpdate = true;
-					finish(candidate, true);
-					invalidate();
+
+					if (candidate.next === candidate.materials.length && !candidate.active.size) {
+						// Recheck once at handoff in case an earlier dependency changed
+						// while this candidate's remaining materials were being prepared.
+						if (candidate.materials.every((material) => queue.ensure(candidate.mesh, material, scene, camera))) {
+							renderer.shadowMap.needsUpdate = true;
+							finish(candidate, true);
+							invalidate();
+						} else candidate.next = 0;
+						advanced = true;
+					}
+
+					idle = advanced ? 0 : idle + 1;
 				} catch (error) {
 					finish(candidate, false, error);
+					idle = 0;
 				}
 			}
 		} catch (error) {

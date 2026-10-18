@@ -75,8 +75,8 @@ export class FurnitureAssetCache {
 
 export class FurnitureAssetStore {
 	private furniture = new AssetLeaseCache<LoadedFurniture>((asset) => asset.dispose(), true);
-	private loadModel = createTaskQueue(6);
-	private build = createTaskQueue(4);
+	private loadModel = createTaskQueue(8);
+	private build = createTaskQueue(8);
 	private disposed = false;
 
 	private catalog: FurnitureDB;

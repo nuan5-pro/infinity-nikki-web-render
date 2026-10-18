@@ -15,7 +15,13 @@ import {
 	createGpuPreparation,
 	type GpuPreparationOptions,
 } from '../../src/runtime/gpuPreparation.js';
-import { registerMaterialFinalizer } from '../../src/runtime/materialPreparation.js';
+import {
+	invalidateMaterialBindings,
+	registerMaterialDependencies,
+	registerMaterialFinalizer,
+} from '../../src/runtime/materialPreparation.js';
+import { bindPaperMaterial } from '../../src/furniture/paperMaterial.js';
+import { CustomDataBuffer } from '../../src/furniture/customData.js';
 
 function setup(options: Partial<GpuPreparationOptions> = {}) {
 	const scene = new Scene();
@@ -62,7 +68,13 @@ function setup(options: Partial<GpuPreparationOptions> = {}) {
 			const program = { program: {}, getUniforms: () => ({ seq: [] }) };
 			state.programs.set('program', program);
 			state.currentProgram = program;
-			state.uniforms = { map: { value: value.map } };
+			const shader = {
+				uniforms: { map: { value: value.map } },
+				vertexShader: 'void main() {}',
+				fragmentShader: 'void main() {}',
+			};
+			value.onBeforeCompile(shader as never, renderer);
+			state.uniforms = shader.uniforms;
 		}),
 		compileAsync: vi.fn(async () => {}),
 		initTexture: vi.fn(),
@@ -93,6 +105,202 @@ function setup(options: Partial<GpuPreparationOptions> = {}) {
 }
 
 describe('bounded renderer-owned GPU preparation', () => {
+	it.each(['pending', 'ready'] as const)(
+		'refreshes %s paper bindings after buffer growth without reviving disposed textures or recompiling',
+		async (phase) => {
+			const state = setup();
+			const { gpu, scene, camera, renderer, mesh, material } = state;
+			material.userData.foliage = { home: true };
+			const previous = new CustomDataBuffer([1], 1, 64);
+			const next = new CustomDataBuffer([1], 16, 64);
+			bindPaperMaterial(material, previous);
+			gpu.beginFrame(scene, camera);
+			gpu.ensure(mesh, material, scene, camera);
+			state.complete();
+			if (phase === 'ready') {
+				gpu.beginFrame(scene, camera);
+				await Promise.resolve();
+				expect(gpu.areReady(mesh, [material], scene, camera)).toBe(true);
+			}
+
+			bindPaperMaterial(material, next);
+			previous.dispose();
+			vi.mocked(renderer.initTexture).mockClear();
+			const before = gpu.getStats();
+			expect(gpu.areReady(mesh, [material], scene, camera)).toBe(false);
+			expect(gpu.getStats()).toEqual(before);
+			expect(renderer.initTexture).not.toHaveBeenCalled();
+			expect(gpu.ensure(mesh, material, scene, camera)).toBe(false);
+			gpu.beginFrame(scene, camera);
+			await Promise.resolve();
+			expect(gpu.areReady(mesh, [material], scene, camera)).toBe(true);
+			expect(renderer.initTexture).toHaveBeenCalledExactlyOnceWith(next.texture);
+			expect(renderer.compile).toHaveBeenCalledTimes(1);
+			expect(renderer.compileAsync).toHaveBeenCalledTimes(1);
+			gpu.dispose();
+			next.dispose();
+			mesh.geometry.dispose();
+			material.dispose();
+		},
+	);
+
+	it('refreshes generic uniform replacements during commit before publishing readiness', async () => {
+		const state = setup();
+		const { gpu, scene, camera, renderer, mesh, material } = state;
+		const previous = new Texture();
+		const next = new Texture();
+		const uniform = { value: previous };
+		material.onBeforeCompile = (shader) => { shader.uniforms.dynamicTexture = uniform; };
+		let commit!: () => void;
+		vi.mocked(renderer.compileAsync).mockImplementation(() => new Promise((resolve) => { commit = resolve; }));
+		gpu.beginFrame(scene, camera);
+		gpu.ensure(mesh, material, scene, camera);
+		state.complete();
+		gpu.beginFrame(scene, camera);
+		expect(renderer.initTexture).toHaveBeenCalledExactlyOnceWith(previous);
+		uniform.value = next;
+		invalidateMaterialBindings(material);
+		previous.dispose();
+		commit();
+		await Promise.resolve();
+		expect(gpu.getStats().completed).toBe(0);
+		expect(gpu.areReady(mesh, [material], scene, camera)).toBe(false);
+		gpu.beginFrame(scene, camera);
+		expect(gpu.areReady(mesh, [material], scene, camera)).toBe(true);
+		expect(vi.mocked(renderer.initTexture).mock.calls.map(([texture]) => texture)).toEqual([previous, next]);
+		expect(renderer.compile).toHaveBeenCalledTimes(1);
+		expect(renderer.compileAsync).toHaveBeenCalledTimes(1);
+		gpu.dispose();
+		next.dispose();
+	});
+
+	it('refreshes binding dependencies in every cached lighting variant without recompiling', async () => {
+		const state = setup();
+		const { gpu, scene, camera, renderer, mesh, material } = state;
+		material.userData.foliage = { home: true };
+		const previous = new CustomDataBuffer([1], 1, 64);
+		const next = new CustomDataBuffer([1], 16, 64);
+		bindPaperMaterial(material, previous);
+		state.complete();
+		for (const enabled of [false, true]) {
+			renderer.shadowMap.enabled = enabled;
+			gpu.beginFrame(scene, camera);
+			gpu.ensure(mesh, material, scene, camera);
+			gpu.beginFrame(scene, camera);
+			await Promise.resolve();
+			expect(gpu.areReady(mesh, [material], scene, camera)).toBe(true);
+		}
+		bindPaperMaterial(material, next);
+		previous.dispose();
+		vi.mocked(renderer.initTexture).mockClear();
+		for (const enabled of [false, true, false]) {
+			renderer.shadowMap.enabled = enabled;
+			gpu.beginFrame(scene, camera);
+			gpu.ensure(mesh, material, scene, camera);
+			gpu.beginFrame(scene, camera);
+			await Promise.resolve();
+			expect(gpu.areReady(mesh, [material], scene, camera)).toBe(true);
+		}
+		expect(renderer.initTexture).toHaveBeenCalledExactlyOnceWith(next.texture);
+		expect(renderer.compile).toHaveBeenCalledTimes(2);
+		expect(renderer.compileAsync).toHaveBeenCalledTimes(2);
+		gpu.dispose();
+		next.dispose();
+	});
+
+	it.each(['resolve', 'reject'] as const)(
+		'keeps a replacement job in flight when an older cancelled commit later %ss',
+		async (mode) => {
+			const state = setup();
+			const { gpu, scene, camera, renderer, mesh, material } = state;
+			let settle!: () => void;
+			vi.mocked(renderer.compileAsync).mockImplementationOnce(() => new Promise((resolve, reject) => {
+				settle = () => mode === 'resolve' ? resolve() : reject(new Error('retired commit'));
+			}));
+			state.complete();
+			gpu.beginFrame(scene, camera);
+			gpu.ensure(mesh, material, scene, camera);
+			gpu.beginFrame(scene, camera);
+			gpu.cancelMaterial(material);
+			gpu.ensure(mesh, material, scene, camera);
+			expect(gpu.getStats().pending).toBe(1);
+			settle();
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(gpu.getStats()).toMatchObject({ pending: 1, completed: 0, errors: 0 });
+			gpu.beginFrame(scene, camera);
+			await Promise.resolve();
+			expect(gpu.areReady(mesh, [material], scene, camera)).toBe(true);
+			expect(gpu.getStats()).toMatchObject({ pending: 0, completed: 1, errors: 0 });
+			gpu.dispose();
+		},
+	);
+
+	it('submits independent dependency programs together while retaining the global in-flight bound', () => {
+		const state = setup({ maxCompiles: 100 });
+		const { gpu, scene, camera, renderer, mesh, material } = state;
+		const dependencies = Array.from({ length: 10 }, () => new MeshBasicMaterial());
+		registerMaterialDependencies(material, dependencies);
+		gpu.beginFrame(scene, camera);
+		expect(gpu.ensure(mesh, material, scene, camera)).toBe(false);
+		expect(renderer.compile).toHaveBeenCalledTimes(8);
+		expect(gpu.getStats().pending).toBe(8);
+		gpu.beginFrame(scene, camera);
+		gpu.ensure(mesh, material, scene, camera);
+		expect(renderer.compile).toHaveBeenCalledTimes(8);
+		gpu.dispose();
+		dependencies.forEach((dependency) => dependency.dispose());
+	});
+
+	it('rotates upload work when one job exhausts the frame budget', async () => {
+		let time = 0;
+		const state = setup({ maxUploads: Infinity, clock: () => time });
+		const { gpu, scene, camera, renderer, mesh, material } = state;
+		const other = new MeshBasicMaterial();
+		for (const value of [material, other])
+			for (const slot of ['map', 'alphaMap', 'lightMap'] as const) value[slot] = new Texture();
+		vi.mocked(renderer.initTexture).mockImplementation(() => { time += 2; });
+		gpu.beginFrame(scene, camera);
+		gpu.ensure(mesh, material, scene, camera);
+		gpu.ensure(mesh, other, scene, camera);
+		state.complete();
+		gpu.beginFrame(scene, camera);
+		gpu.beginFrame(scene, camera);
+		const uploaded = vi.mocked(renderer.initTexture).mock.calls.map(([texture]) => texture);
+		expect(uploaded).toHaveLength(4);
+		expect(uploaded.slice(0, 2).every((texture) => [material.map, material.alphaMap, material.lightMap].includes(texture))).toBe(true);
+		expect(uploaded.slice(2).every((texture) => [other.map, other.alphaMap, other.lightMap].includes(texture))).toBe(true);
+		gpu.beginFrame(scene, camera);
+		await Promise.resolve();
+		expect(gpu.getStats().completed).toBe(2);
+		gpu.dispose();
+		for (const value of [material, other]) {
+			for (const slot of ['map', 'alphaMap', 'lightMap'] as const) value[slot]?.dispose();
+			value.dispose();
+		}
+	});
+
+	it.each(['dispose', 'context', 'reset'] as const)('does not revive a %s-retired commit after its promise resolves', async (mode) => {
+		const state = setup();
+		const { gpu, scene, camera, renderer, mesh, material } = state;
+		let commit!: () => void;
+		vi.mocked(renderer.compileAsync).mockImplementationOnce(() => new Promise((resolve) => { commit = resolve; }));
+		gpu.beginFrame(scene, camera);
+		gpu.ensure(mesh, material, scene, camera);
+		state.complete();
+		gpu.beginFrame(scene, camera);
+		switch (mode) {
+		case 'dispose': material.dispose(); break;
+		case 'context': renderer.domElement.dispatchEvent(new Event('webglcontextlost')); break;
+		case 'reset': gpu.reset(); break;
+		}
+		commit();
+		await Promise.resolve();
+		expect(gpu.getStats()).toMatchObject({ pending: 0, completed: 0, errors: 0 });
+		expect(gpu.areReady(mesh, [material], scene, camera)).toBe(false);
+		gpu.dispose();
+	});
+
 	it('retains completed lighting/shadow variants and texture uploads across scene state changes', async () => {
 		const state = setup();
 		const { gpu, scene, camera, renderer, mesh, material } = state;

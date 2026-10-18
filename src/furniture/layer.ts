@@ -41,6 +41,8 @@ interface Entry {
 interface State {
 	store: FurnitureAssetStore;
 	batches: Map<number, FurnitureBatch>;
+	// Empty batches borrow assets retained by the store until explicit eviction.
+	idle: Map<number, FurnitureBatch>;
 	leases: Map<number, AssetLease<LoadedFurniture>>;
 	records: Map<string, Entry>;
 }
@@ -97,7 +99,11 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 		for (const batch of value.batches.values()) batch.dispose();
 		for (const lease of value.leases.values()) lease.release();
 
-		if (!keepStore) value.store.dispose();
+		if (!keepStore) {
+			for (const batch of value.idle.values()) batch.dispose();
+			value.idle.clear();
+			value.store.dispose();
+		}
 	}
 
 	function releasePreloads() {
@@ -106,12 +112,13 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 		loaded.clear();
 	}
 
-	function makeState(selection: FurnitureAssetSelection, reuse?: FurnitureAssetStore): State {
+	function makeState(selection: FurnitureAssetSelection, reuse?: State): State {
 		if (!catalog) throw new Error('Call furniture.setup first');
 
 		return {
-			store: reuse ?? new FurnitureAssetStore(catalog, configs, url, selection, context.renderer, cache, decoderPath),
+			store: reuse?.store ?? new FurnitureAssetStore(catalog, configs, url, selection, context.renderer, cache, decoderPath),
 			batches: new Map(),
+			idle: reuse?.idle ?? new Map(),
 			leases: new Map(),
 			records: new Map(),
 		};
@@ -138,18 +145,29 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 	}
 
 	async function prepareBatches(target: State, acquired: BatchLease[], task: FurnitureTask, signal: AbortSignal, check: () => void) {
-		// Prepare empty candidates while live instance buffers remain available.
+		// Refill completed slots instead of waiting for the slowest batch in each group.
+		let next = 0;
 		let completed = 0;
-		for (let offset = 0; offset < acquired.length; offset += 4) {
-			await Promise.all(acquired.slice(offset, offset + 4).map(async ({ id }) => {
-				const batch = target.batches.get(id)!;
-				const ready = await context.prepare(batch.mesh, () => signal.aborted || !!task.signal?.aborted || disposed);
-				check();
-				if (!ready) throw new Error('Furniture GPU preparation cancelled');
+		let failed = false;
+		const results = await Promise.allSettled(Array.from({ length: Math.min(16, acquired.length) }, async () => {
+			try {
+				while (next < acquired.length && !failed) {
+					check();
+					const { id } = acquired[next++]!;
+					const batch = target.batches.get(id)!;
+					const ready = await context.prepare(batch.mesh, () => failed || signal.aborted || !!task.signal?.aborted || disposed);
+					check();
+					if (!ready) throw new Error('Furniture GPU preparation cancelled');
 
-				task.onProgress?.({ phase: 'preparing', completed: ++completed, total: acquired.length });
-			}));
-		}
+					task.onProgress?.({ phase: 'preparing', completed: ++completed, total: acquired.length });
+				}
+			} catch (error) {
+				failed = true;
+				throw error;
+			}
+		}));
+		const failure = results.find(result => result.status === 'rejected');
+		if (failure?.status === 'rejected') throw failure.reason;
 	}
 
 	function writeInstances(target: State, items: InstanceSnapshot[], isCurrent: (id: string) => boolean) {
@@ -205,9 +223,13 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 				const asset = await lease.ready;
 				check();
 
-				const batch = new FurnitureBatch(asset, Math.max(32, counts.get(id)!), context.renderer.capabilities.maxTextureSize);
+				const capacity = Math.max(32, counts.get(id)!);
+				const cached = target.idle.get(id);
+				const batch = cached ?? new FurnitureBatch(asset, capacity, context.renderer.capabilities.maxTextureSize);
+				target.idle.delete(id);
 				target.leases.set(id, lease);
 				target.batches.set(id, batch);
+				if (cached) cached.reuse(capacity);
 				task.onProgress?.({ phase: 'loading', completed: ++completed, total: ids.length });
 			}));
 			const failure = results.find((result) => result.status === 'rejected');
@@ -258,8 +280,9 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 		target.records.delete(id);
 		if (!entry.batch.ids.length) {
 			const assetId = entry.batch.asset.config.id;
-			entry.batch.dispose();
+			entry.batch.clear();
 			target.batches.delete(assetId);
+			target.idle.set(assetId, entry.batch);
 			target.leases.get(assetId)?.release();
 			target.leases.delete(assetId);
 		}
@@ -281,7 +304,7 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 
 		const signal = active.signal;
 		const reused = state && !state.records.size && selection.model === tiers.model && selection.material === tiers.material
-			? state.store : undefined;
+			? state : undefined;
 		const candidate = makeState(selection, reused);
 		try {
 			await populate(candidate, values, task, signal);
@@ -483,12 +506,14 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 		},
 
 		getModelBounds(id: number): Box3 | undefined {
-			return (state?.batches.get(id)?.asset ?? loaded.get(id))?.data.boundingBox.clone();
+			return (state?.batches.get(id)?.asset ?? state?.idle.get(id)?.asset ?? loaded.get(id))?.data.boundingBox.clone();
 		},
 
 		clearUnused() {
 			alive();
 			releasePreloads();
+			for (const batch of state?.idle.values() ?? []) batch.dispose();
+			state?.idle.clear();
 			state?.store.clearUnused();
 			cache.clearUnused();
 		},

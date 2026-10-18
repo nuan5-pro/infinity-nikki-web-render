@@ -156,23 +156,30 @@ export async function createSourceMaterial(
 	};
 
 	try {
-		material.map = await texture(pbr.baseColorTexture, true);
 		if (material instanceof MeshStandardMaterial) {
+			const [baseColor, metallicRoughness, normal, occlusion, emissive] = await Promise.all([
+				texture(pbr.baseColorTexture, true),
+				texture(pbr.metallicRoughnessTexture, false),
+				texture(definition.normalTexture, false),
+				texture(definition.occlusionTexture, false),
+				texture(definition.emissiveTexture, true),
+			]);
+			material.map = baseColor;
 			material.metalness = pbr.metallicFactor ?? 1;
 			material.roughness = pbr.roughnessFactor ?? 1;
-			material.metalnessMap = material.roughnessMap = await texture(pbr.metallicRoughnessTexture, false);
-			material.normalMap = await texture(definition.normalTexture, false);
+			material.metalnessMap = material.roughnessMap = metallicRoughness;
+			material.normalMap = normal;
 
 			const normalScale = definition.normalTexture?.scale ?? 1;
 			material.normalScale.set(normalScale, normalScale);
-			material.aoMap = await texture(definition.occlusionTexture, false);
+			material.aoMap = occlusion;
 			material.aoMapIntensity = definition.occlusionTexture?.strength ?? 1;
-			material.emissiveMap = await texture(definition.emissiveTexture, true);
+			material.emissiveMap = emissive;
 			material.emissive.fromArray(definition.emissiveFactor ?? [0, 0, 0]);
 			material.emissiveIntensity =
 				(extensions.KHR_materials_emissive_strength as { emissiveStrength?: number } | undefined)
 					?.emissiveStrength ?? 1;
-		}
+		} else material.map = await texture(pbr.baseColorTexture, true);
 
 		if (material instanceof MeshPhysicalMaterial) {
 			const extension = (key: string) => extensions[key] as Record<string, any> | undefined;
@@ -232,6 +239,8 @@ export async function createSourceMaterial(
 		});
 		return material;
 	} catch (error) {
+		// Concurrent loads can still create sampler clones after the first failure.
+		await Promise.allSettled(sampled.values());
 		for (const texture of owned) texture.dispose();
 
 		material.dispose();

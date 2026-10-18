@@ -116,6 +116,26 @@ export class FurnitureBatch {
 		return mesh;
 	}
 
+	/** Keep GPU resources warm while another scheme owns the visible instances. */
+	clear(): void {
+		this.mesh.removeFromParent();
+		this.mesh.count = 0;
+		this.ids.length = 0;
+		this.dirty.clear();
+		this.box.makeEmpty();
+		this.mesh.boundingSphere!.makeEmpty();
+		this.mesh.instanceColor!.array.fill(1);
+		this.mesh.instanceColor!.clearUpdateRanges();
+		this.mesh.instanceColor!.addUpdateRange(0, this.mesh.instanceColor!.array.length);
+		this.mesh.instanceColor!.needsUpdate = true;
+	}
+
+	reuse(capacity: number): void {
+		this.reserve(capacity);
+		const materials = Array.isArray(this.mesh.material) ? this.mesh.material : [this.mesh.material];
+		for (const material of new Set(materials)) bindPaperMaterial(material, this.data);
+	}
+
 	reserve(count: number): void {
 		if (count <= this.data.capacity) return;
 		if (count > MAX_RENDER_INSTANCES) throw new RangeError('Furniture instance budget exceeded');

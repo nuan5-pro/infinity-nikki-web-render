@@ -1,9 +1,42 @@
 import { describe, expect, it } from 'vitest';
-import { arraySampler } from '../src/furniture/paperMaterial.js';
+import { MeshBasicMaterial } from 'three';
+import { arraySampler, bindPaperMaterial } from '../src/furniture/paperMaterial.js';
+import { CustomDataBuffer } from '../src/furniture/customData.js';
+import { materialBindingRevision, registerMaterialDependencies } from '../src/runtime/materialPreparation.js';
 import { resolveCustomData } from '../src/furniture/colorings.js';
 import type { FurnitureModelConfig } from '../src/furniture/types.js';
 
 describe('native array shader consumers', () => {
+	it('changes binding revisions only when the owned texture changes, including shadow dependencies', () => {
+		const material = new MeshBasicMaterial();
+		const shadow = new MeshBasicMaterial();
+		material.userData.foliage = shadow.userData.foliage = { home: true };
+		registerMaterialDependencies(material, [shadow]);
+		const first = new CustomDataBuffer([1], 1, 64);
+		const second = new CustomDataBuffer([1], 16, 64);
+		try {
+			for (const owner of [material, shadow]) expect(materialBindingRevision(owner)).toBe(0);
+			bindPaperMaterial(material, first);
+			for (const owner of [material, shadow]) expect(materialBindingRevision(owner)).toBe(1);
+			const compile = material.onBeforeCompile;
+			const key = material.customProgramCacheKey();
+			bindPaperMaterial(material, first);
+			first.set(0, [2]);
+			first.flush();
+			bindPaperMaterial(material, first);
+			for (const owner of [material, shadow]) expect(materialBindingRevision(owner)).toBe(1);
+			bindPaperMaterial(material, second);
+			for (const owner of [material, shadow]) expect(materialBindingRevision(owner)).toBe(2);
+			expect(material.onBeforeCompile).toBe(compile);
+			expect(material.customProgramCacheKey()).toBe(key);
+		} finally {
+			first.dispose();
+			second.dispose();
+			material.dispose();
+			shadow.dispose();
+		}
+	});
+
 	it('preserves unrelated samplers, nested coordinates and explicit gradients', () => {
 		const source = `uniform sampler2D diffuse, normal;
       vec4 a = texture2D(diffuse, mix(uv, vec2(1., 2.), 0.5));

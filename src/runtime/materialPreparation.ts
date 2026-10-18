@@ -20,6 +20,16 @@ const finalized = new WeakMap<
 	{ renderer: DrawContext[0]; scene: DrawContext[1]; shadowType: number; shadowsEnabled: boolean }
 >();
 const dependencies = new WeakMap<Material, readonly Material[]>();
+const bindingRevisions = new WeakMap<Material, number>();
+
+export function materialBindingRevision(material: Material) {
+	return bindingRevisions.get(material) ?? 0;
+}
+
+/** Refresh upload dependencies without invalidating the shader program. */
+export function invalidateMaterialBindings(material: Material) {
+	bindingRevisions.set(material, materialBindingRevision(material) + 1);
+}
 
 export function registerMaterialDependencies(material: Material, values: readonly Material[]) {
 	dependencies.set(material, values);

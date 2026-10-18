@@ -1,6 +1,26 @@
 import { expect, it, vi } from 'vitest';
 import { BoxGeometry, Mesh, MeshBasicMaterial, PCFShadowMap, PerspectiveCamera, Scene, type WebGLRenderer } from 'three';
-import { finalizeMaterial, materialNeedsFinalization, registerMaterialFinalizer } from '../src/runtime/materialPreparation.js';
+import {
+	finalizeMaterial,
+	invalidateMaterialBindings,
+	materialBindingRevision,
+	materialNeedsFinalization,
+	registerMaterialFinalizer,
+} from '../src/runtime/materialPreparation.js';
+
+it('tracks binding changes independently of shader finalization', () => {
+	const material = new MeshBasicMaterial();
+	const key = material.customProgramCacheKey();
+	const compile = material.onBeforeCompile;
+	expect(materialBindingRevision(material)).toBe(0);
+	invalidateMaterialBindings(material);
+	invalidateMaterialBindings(material);
+	expect(materialBindingRevision(material)).toBe(2);
+	expect(material.customProgramCacheKey()).toBe(key);
+	expect(material.onBeforeCompile).toBe(compile);
+	expect(materialNeedsFinalization(material)).toBe(false);
+	material.dispose();
+});
 
 it('finalizes shader variants again when renderer shadows are toggled before GPU preparation', () => {
 	const renderer = { shadowMap: { enabled: true, type: PCFShadowMap } } as unknown as WebGLRenderer;
