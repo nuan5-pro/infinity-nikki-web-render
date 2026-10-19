@@ -13,6 +13,7 @@ import {
 	materialDependencies,
 	materialNeedsFinalization,
 } from './materialPreparation.js';
+import { createTextureUploads } from './textureUploads.js';
 
 type Renderable = Object3D & { material?: Material | Material[]; geometry?: Mesh['geometry'] };
 
@@ -37,6 +38,7 @@ type Job = {
 
 export interface GpuPreparationOptions {
 	invalidate: () => void;
+	onContextRestored?: () => void | Promise<void>;
 	budgetMs?: number;
 	maxCompiles?: number;
 	maxInFlight?: number;
@@ -109,6 +111,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 	const releases = new Map<Material, () => void>();
 	const uploads = new WeakMap<Texture, { generation: number; version: number }>();
 	const textureReleases = new Map<Texture, () => void>();
+	const texturePixels = createTextureUploads(renderer, textureReleases, options.invalidate, options.onContextRestored);
 	const readyPrograms = new WeakSet<WebGLProgram>();
 
 	const pending = new Set<Job>();
@@ -167,6 +170,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 		job.programs = [];
 		job.textures = [];
 		job.uniforms = undefined;
+		if (!pending.size && !compiling.size) texturePixels.release();
 	}
 
 	function reset() {
@@ -235,6 +239,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 		job.programs = [];
 		stats.completed++;
 		stats.lastReadyAt = clock();
+		if (!pending.size && !compiling.size) texturePixels.release();
 		options.invalidate();
 	}
 
@@ -366,6 +371,10 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 
 				const previous = uploads.get(texture);
 				if (previous?.generation === generation && previous.version === texture.version) continue;
+				if (!texturePixels.ensure(texture)) {
+					complete = false;
+					continue;
+				}
 				const size = textureBytes(texture);
 				if (
 					!budget() ||
@@ -551,12 +560,17 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 
 	const contextLost = () => {
 		lost = true;
+		texturePixels.lost();
 		reset();
 	};
 
 	const contextRestored = () => {
 		lost = false;
 		reset();
+		void texturePixels.restore().catch(error => {
+			stats.errors++;
+			console.error('[Texture recovery]', error);
+		});
 	};
 
 	renderer.domElement.addEventListener('webglcontextlost', contextLost);
@@ -566,6 +580,7 @@ export function createGpuPreparation(renderer: WebGLRenderer, options: GpuPrepar
 		if (disposed) return;
 
 		disposed = true;
+		texturePixels.dispose();
 		reset();
 		for (const release of [...releases.values()]) release();
 

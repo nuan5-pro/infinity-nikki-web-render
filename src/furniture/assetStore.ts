@@ -26,6 +26,7 @@ import type { FurnitureAssetSelection, FurnitureDB, FurnitureModelConfig } from 
 export interface LoadedFurniture {
 	config: FurnitureModelConfig;
 	data: GeometryData;
+	releaseStaging(): void;
 	dispose(): void;
 }
 
@@ -211,7 +212,7 @@ export class FurnitureAssetStore {
 				if (prepared) await this.cache.geometry.prepare([data.geometry], [null], true, signal);
 
 				applyHomeObjectLightDefault(config, data.plainMaterials, data.meshBaseNames, data.slotMeshIndices);
-				return { config, data, dispose };
+				return { config, data, releaseStaging: () => resources.releaseStaging(), dispose };
 			} catch (error) {
 				dispose();
 				throw error;

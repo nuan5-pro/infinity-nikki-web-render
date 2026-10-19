@@ -32,6 +32,7 @@ import {
 	ROCK_PROJECTION_TOP_ROLES,
 } from './rockProjectionTopArrayTexture.js';
 import { nativeWorldFrameGLSL } from '../nativeWorldFrame.js';
+import { registerMaterialFinalizer } from '../../runtime/materialPreparation.js';
 
 const roles: LayeredRole[] = ['D', 'N', 'O', 'T', 'D1', 'N1', 'O1', 'B', 'C', 'M', 'D2', 'N2', 'O2'];
 const worldDeclaration = `
@@ -127,6 +128,7 @@ export function createRockProjectionEditorMaterial(
 	material.colorWrite = source.colorWrite;
 	material.toneMapped = source.toneMapped;
 	material.visible = source.visible;
+	registerMaterialFinalizer(material, renderer => topArray.ensure(renderer));
 
 	let released = false;
 	material.addEventListener('dispose', () => {

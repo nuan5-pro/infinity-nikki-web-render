@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
 	BoxGeometry,
+	DataTexture,
 	DirectionalLight,
 	Mesh,
 	MeshBasicMaterial,
@@ -22,6 +23,7 @@ import {
 } from '../../src/runtime/materialPreparation.js';
 import { bindPaperMaterial } from '../../src/furniture/paperMaterial.js';
 import { CustomDataBuffer } from '../../src/furniture/customData.js';
+import { makeTextureRecoverable, TextureSource } from '../../src/resources/textureSource.js';
 
 function setup(options: Partial<GpuPreparationOptions> = {}) {
 	const scene = new Scene();
@@ -105,6 +107,48 @@ function setup(options: Partial<GpuPreparationOptions> = {}) {
 }
 
 describe('bounded renderer-owned GPU preparation', () => {
+	it('rehydrates retired pixels for samplers created by deferred material and shadow variants', async () => {
+		const state = setup();
+		const { gpu, scene, camera, renderer, mesh, material } = state;
+		const bytes = new Uint8Array([1, 2, 3, 4]);
+		const decode = vi.fn(async () => new DataTexture(bytes.slice(), 1, 1));
+		const texture = makeTextureRecoverable(new DataTexture(bytes, 1, 1), decode);
+		const source = texture.source as TextureSource;
+		source.retain().release();
+		registerMaterialFinalizer(material, () => {
+			material.map?.dispose();
+			material.map = texture.clone();
+		});
+		vi.mocked(renderer.initTexture).mockImplementation(sampler => {
+			expect(sampler.source).toBe(source);
+			expect((sampler as DataTexture).image.data).toEqual(bytes);
+		});
+		state.complete();
+		try {
+			for (const [index, enabled] of [false, true].entries()) {
+				renderer.shadowMap.enabled = enabled;
+				gpu.beginFrame(scene, camera);
+				expect(gpu.ensure(mesh, material, scene, camera)).toBe(false);
+				gpu.beginFrame(scene, camera);
+				expect(renderer.initTexture).toHaveBeenCalledTimes(index);
+				expect(gpu.areReady(mesh, [material], scene, camera)).toBe(false);
+				await vi.waitFor(() => expect(source.resident).toBe(true));
+				gpu.beginFrame(scene, camera);
+				await Promise.resolve();
+				expect(gpu.areReady(mesh, [material], scene, camera)).toBe(true);
+				expect(source.resident).toBe(false);
+				expect(renderer.initTexture).toHaveBeenLastCalledWith(material.map);
+			}
+			expect(decode).toHaveBeenCalledTimes(2);
+		} finally {
+			gpu.dispose();
+			material.map?.dispose();
+			material.dispose();
+			mesh.geometry.dispose();
+			texture.dispose();
+		}
+	});
+
 	it.each(['pending', 'ready'] as const)(
 		'refreshes %s paper bindings after buffer growth without reviving disposed textures or recompiling',
 		async (phase) => {

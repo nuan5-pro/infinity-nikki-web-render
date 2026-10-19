@@ -125,6 +125,10 @@ export function packRockProjectionTopPixels(layers: readonly TopPreviewPixels[])
 
 function previewPixels(texture: Texture): TopPreviewPixels {
 	const { width, height } = imageSize(texture.image);
+	const pixels = (texture.image as { data?: unknown }).data;
+	if (pixels instanceof Uint8Array || pixels instanceof Uint8ClampedArray)
+		return { width, height, data: pixels, flipY: texture.flipY };
+
 	const canvas = document.createElement('canvas');
 	canvas.width = width;
 	canvas.height = height;

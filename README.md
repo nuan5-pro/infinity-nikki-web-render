@@ -139,3 +139,5 @@ context.dispose()
 `getResourceStats()` 返回数量：`materials` 为已缓存家具的去重渲染材质数，`models` 为已缓存家具种类数（均含闲置资源），`shaders` 为整个 renderer 的程序数。这些指标不是显存字节数。`canClearCache` 表示是否有可释放的预载、闲置资产或底层资源缓存。
 
 `clearUnused()` 释放预载和闲置缓存；`furniture.dispose()` 释放单层；`context.dispose()` 释放所有层及内部资源。应用管理 renderer、scene 和 camera 的生命周期。
+
+家具的不可变图像与 Paper 数组在 GPU 准备完成后释放 CPU 像素。新采样器或 WebGL 上下文恢复需要上传时，从编码资源重新解码；恢复期间暂停绘制。应用可通过 `createRenderContext` 的 `onContextRestored` 回调重建自己持有的预计算渲染目标。

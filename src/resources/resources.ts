@@ -16,6 +16,7 @@ import {
 } from '../furniture/manifest.js';
 import { ImageBitmapSource } from './imageBitmapSource.js';
 import { ImagePixelDecoder, type ImagePixels } from './imagePixels.js';
+import { makeTextureRecoverable, TextureSource, type TexturePixels } from './textureSource.js';
 
 export interface FurnitureResourceReader {
 	readonly renderer?: WebGLRenderer;
@@ -105,6 +106,7 @@ export class FurnitureResources implements FurnitureResourceReader {
 	private memberLeases = new Set<AssetLease<Uint8Array<ArrayBuffer>>>();
 	private binaryLeases = new Map<string, AssetLease<ArrayBuffer>>();
 	private textureLeases = new Map<string, AssetLease<Texture>>();
+	private staging = new Map<TextureSource, TexturePixels>();
 	private disposed = false;
 	private catalog: Pick<FurnitureDB, 'textures' | 'rawResources' | 'bundles'>;
 	private cache: FurnitureResourceCache;
@@ -221,38 +223,41 @@ export class FurnitureResources implements FurnitureResourceReader {
 		validatePackedResource(asset, this.catalog.bundles);
 
 		const key = `image:${this.imageKey(definition, quality)}`;
-		return this.borrowTexture(key, this.cache.images, async (signal) => {
-			if (definition.encoding === 'rgb-alpha') {
-				const lease = this.acquireImagePixels(definition, quality);
-				const abort = () => lease.release();
-				signal.addEventListener('abort', abort, { once: true });
+		return this.borrowTexture(key, this.cache.images, (signal) => this.decodeTexture(definition, quality, signal), true);
+	}
 
-				try {
-					signal.throwIfAborted();
-					const image = await lease.ready;
-					signal.throwIfAborted();
-
-					const texture = new DataTexture(image.data, image.width, image.height);
-					texture.flipY = false;
-					texture.needsUpdate = true;
-					return texture;
-				} finally {
-					signal.removeEventListener('abort', abort);
-					lease.release();
-				}
-			}
-
-			const lease = this.acquirePacked(asset);
+	private async decodeTexture(definition: FurnitureTextureResource, quality: ModelAssetProfile, signal: AbortSignal): Promise<Texture> {
+		const asset = definition[quality];
+		if (definition.encoding === 'rgb-alpha') {
+			const lease = this.acquireImagePixels(definition, quality);
 			const abort = () => lease.release();
 			signal.addEventListener('abort', abort, { once: true });
+
 			try {
 				signal.throwIfAborted();
-				return await this.decode(await lease.ready, definition.mimeType);
+				const image = await lease.ready;
+				signal.throwIfAborted();
+
+				const texture = new DataTexture(image.data, image.width, image.height);
+				texture.flipY = false;
+				texture.needsUpdate = true;
+				return texture;
 			} finally {
 				signal.removeEventListener('abort', abort);
 				lease.release();
 			}
-		});
+		}
+
+		const lease = this.acquirePacked(asset);
+		const abort = () => lease.release();
+		signal.addEventListener('abort', abort, { once: true });
+		try {
+			signal.throwIfAborted();
+			return await this.decode(await lease.ready, definition.mimeType);
+		} finally {
+			signal.removeEventListener('abort', abort);
+			lease.release();
+		}
 	}
 
 	async arrayImage(ids: string[], quality: ModelAssetProfile): Promise<Texture> {
@@ -339,52 +344,8 @@ export class FurnitureResources implements FurnitureResourceReader {
 			return definition;
 		});
 		const key = `paper:${definitions.map((definition) => this.imageKey(definition, quality)).join(';')}`;
-		const texture = await this.borrowTexture(key, this.cache.paperArrays, async (signal) => {
-			let data: Uint8Array<ArrayBuffer> | undefined;
-			let width = 0;
-			let height = 0;
-
-			for (let i = 0; i < definitions.length; i++) {
-				signal.throwIfAborted();
-
-				const lease = this.acquireImagePixels(definitions[i]!, quality);
-				const abort = () => lease.release();
-				signal.addEventListener('abort', abort, { once: true });
-
-				try {
-					const image = await lease.ready;
-					signal.throwIfAborted();
-
-					if (!data) {
-						width = image.width;
-						height = image.height;
-						const length = width * height * definitions.length * 4;
-						if (
-							![width, height, length].every((value) => Number.isSafeInteger(value) && value > 0) ||
-							length > 512 * 1024 * 1024
-						) throw new Error('Invalid native paper array dimensions');
-
-						data = new Uint8Array(length);
-					}
-
-					if (
-						image.width !== width ||
-						image.height !== height ||
-						image.data.length !== width * height * 4
-					) throw new Error('Paper array image dimensions differ');
-
-					data.set(image.data, i * width * height * 4);
-				} finally {
-					signal.removeEventListener('abort', abort);
-					lease.release();
-				}
-			}
-
-			const array = new DataArrayTexture(data!, width, height, definitions.length);
-			array.flipY = false;
-			array.needsUpdate = true;
-			return array;
-		}) as DataArrayTexture;
+		const texture = await this.borrowTexture(key, this.cache.paperArrays,
+			(signal) => this.decodePaperArray(definitions, quality, signal), true) as DataArrayTexture;
 		const { width, height, depth } = texture.image;
 		const gl = this.renderer?.getContext() as WebGL2RenderingContext | undefined;
 		if (this.renderer && gl && (
@@ -396,31 +357,107 @@ export class FurnitureResources implements FurnitureResourceReader {
 		return texture;
 	}
 
+	private async decodePaperArray(definitions: FurnitureTextureResource[], quality: ModelAssetProfile, signal: AbortSignal): Promise<Texture> {
+		let data: Uint8Array<ArrayBuffer> | undefined;
+		let width = 0;
+		let height = 0;
+
+		for (let i = 0; i < definitions.length; i++) {
+			signal.throwIfAborted();
+
+			const lease = this.acquireImagePixels(definitions[i]!, quality);
+			const abort = () => lease.release();
+			signal.addEventListener('abort', abort, { once: true });
+
+			try {
+				const image = await lease.ready;
+				signal.throwIfAborted();
+
+				if (!data) {
+					width = image.width;
+					height = image.height;
+					const length = width * height * definitions.length * 4;
+					if (
+						![width, height, length].every((value) => Number.isSafeInteger(value) && value > 0) ||
+						length > 512 * 1024 * 1024
+					) throw new Error('Invalid native paper array dimensions');
+
+					data = new Uint8Array(length);
+				}
+
+				if (
+					image.width !== width ||
+					image.height !== height ||
+					image.data.length !== width * height * 4
+				) throw new Error('Paper array image dimensions differ');
+
+				data.set(image.data, i * width * height * 4);
+			} finally {
+				signal.removeEventListener('abort', abort);
+				lease.release();
+			}
+		}
+
+		const array = new DataArrayTexture(data!, width, height, definitions.length);
+		array.flipY = false;
+		array.needsUpdate = true;
+		return array;
+	}
+
 	texture(key: string, load: () => Promise<Texture>): Promise<Texture> {
 		return this.borrowTexture(key, this.textures, load);
 	}
 
-	private borrowTexture(key: string, cache: AssetLeaseCache<Texture>, load: (signal: AbortSignal) => Promise<Texture>): Promise<Texture> {
+	private borrowTexture(key: string, cache: AssetLeaseCache<Texture>, load: (signal: AbortSignal) => Promise<Texture>, recoverable = false): Promise<Texture> {
 		if (this.disposed) return Promise.reject(new Error('[Furniture] Resource owner disposed'));
 
 		let lease = this.textureLeases.get(key);
 		if (!lease) {
-			lease = cache.acquire(key, load);
+			lease = cache.acquire(key, async (signal) => {
+				const texture = await load(signal);
+				return recoverable ? makeTextureRecoverable(texture, load) : texture;
+			});
 			this.textureLeases.set(key, lease);
 		}
 
 		const active = lease;
-		return active.ready.catch((error) => {
+		return active.ready.then(async texture => {
+			if (this.disposed) throw new Error('Texture resource owner disposed');
+			const source = texture.source;
+			if (source instanceof TextureSource) {
+				let pixels = this.staging.get(source);
+				if (!pixels) {
+					pixels = source.retain();
+					this.staging.set(source, pixels);
+				}
+				try {
+					await pixels.ready;
+				} catch (error) {
+					if (this.staging.get(source) === pixels) this.staging.delete(source);
+					pixels.release();
+					throw error;
+				}
+				if (this.disposed) throw new Error('Texture resource owner disposed');
+			}
+			return texture;
+		}).catch((error) => {
 			if (this.textureLeases.get(key) === active) this.textureLeases.delete(key);
 			active.release();
 			throw error;
 		});
 	}
 
+	/** Construction and CPU finalizers finish before the layer publishes its prepared batch. */
+	releaseStaging(): void {
+		for (const pixels of this.staging.values()) pixels.release();
+		this.staging.clear();
+	}
+
 	dispose(): void {
 		if (this.disposed) return;
 
 		this.disposed = true;
+		this.releaseStaging();
 		for (const lease of this.textureLeases.values()) lease.release();
 
 		for (const lease of this.binaryLeases.values()) lease.release();

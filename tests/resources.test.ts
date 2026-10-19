@@ -66,6 +66,25 @@ describe('standard material resource loading', () => {
 		material.dispose();
 	});
 
+	it('binds a declared Paper role directly to its shared array while preserving standard sampler transforms', async () => {
+		const { owner } = fixture();
+		const array = new DataArrayTexture(new Uint8Array(8), 1, 1, 2);
+		const image = vi.spyOn(owner, 'image');
+		vi.spyOn(owner, 'paperArray').mockResolvedValue(array);
+		const material = await createSourceMaterial({
+			extras: { textureInputs: { D: { images: [ids[0]!, ids[1]!], usage: 'base-color', srgb: true, paperLayer: 'raw' } } },
+			pbrMetallicRoughness: { baseColorTexture: { resource: ids[0]!, texCoord: 1,
+				extensions: { KHR_texture_transform: { offset: [0.2, 0.3], scale: [2, 3] } } } },
+		}, owner, 'full') as MeshStandardMaterial;
+		expect(image).not.toHaveBeenCalled();
+		expect(material.map!.source).toBe(array.source);
+		expect(material.map!.channel).toBe(1);
+		expect(material.map!.offset.toArray()).toEqual([0.2, 0.3]);
+		expect(material.map!.repeat.toArray()).toEqual([2, 3]);
+		expect(material.map!.userData.paperLayer).toBe('raw');
+		material.dispose();
+	});
+
 	it('waits for remaining texture requests before cleaning up a failed material', async () => {
 		const { owner } = fixture();
 		let complete!: (source: Texture) => void;
@@ -129,6 +148,42 @@ function fixture() {
 }
 
 describe('split-image native paper arrays', () => {
+	it('rehydrates retired 2D pixels before assembling a complete array and retains its independent copy', async () => {
+		const { owner, decode } = fixture();
+		const source = await owner.image('a', 'full') as DataTexture;
+		owner.releaseStaging();
+		expect(source.image.data).toBeNull();
+		vi.stubGlobal('OffscreenCanvas', class {
+			getContext() { return {}; }
+		});
+		try {
+			const array = await owner.arrayImage(['a', 'b'], 'full') as DataArrayTexture;
+			const expected = new Uint8Array([1, 45, 67, 0, 2, 45, 67, 255]);
+			expect(array.image.data).toEqual(expected);
+			owner.releaseStaging();
+			expect(source.image.data).toBeNull();
+			expect(array.image.data).toEqual(expected);
+			expect(await owner.arrayImage(['a', 'b'], 'full')).toBe(array);
+			expect(decode).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it('rebuilds evicted pixels from retained transport after the original owner is disposed', async () => {
+		const { owner, createOwner, decode, fetch } = fixture();
+		const other = createOwner();
+		const texture = await owner.paperArray(['a', 'b'], 'full');
+		expect(await other.paperArray(['a', 'b'], 'full')).toBe(texture);
+		owner.dispose();
+		other.releaseStaging();
+		expect(texture.image.data).toBeNull();
+		expect(await other.paperArray(['a', 'b'], 'full')).toBe(texture);
+		expect(texture.image.data).toEqual(new Uint8Array([1, 45, 67, 0, 2, 45, 67, 255]));
+		expect(decode).toHaveBeenCalledTimes(4);
+		expect(fetch).toHaveBeenCalledOnce();
+	});
+
 	it('assembles ordered layers with hidden RGB, shares transport, and releases decoded layer staging', async () => {
 		const { owner, decode, fetch } = fixture();
 		const texture = await owner.paperArray(['a', 'b'], 'full') as DataArrayTexture;

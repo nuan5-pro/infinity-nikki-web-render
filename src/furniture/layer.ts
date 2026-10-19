@@ -220,6 +220,7 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 					check();
 					if (!ready) throw new Error('Furniture GPU preparation cancelled');
 					preparedBatches.add(batch);
+					asset.releaseStaging();
 					task.onProgress?.({ phase: 'preparing', completed: ++prepared, total: ids.length });
 				});
 			}).map(operation => operation.catch(error => {
@@ -412,6 +413,7 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 							const ready = await context.prepare(batch.mesh, stale);
 							if (!ready || stale()) throw new Error('Furniture preload cancelled');
 							preparedBatches.add(batch);
+							asset.releaseStaging();
 						});
 					}
 					// Cached batches are checked against the current scene when populated.

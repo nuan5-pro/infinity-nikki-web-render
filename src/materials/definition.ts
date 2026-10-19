@@ -24,6 +24,7 @@ import type {
 	ModelAssetProfile,
 } from '../furniture/types.js';
 import type { FurnitureResources } from '../resources/resources.js';
+import { readTextureInputs } from './textureInputs.js';
 
 export async function createSourceMaterial(
 	definition: FurnitureMaterialDefinition,
@@ -100,9 +101,13 @@ export async function createSourceMaterial(
 		const key = JSON.stringify([info, srgb]);
 		let pending = sampled.get(key);
 		if (!pending) {
-			pending = resources.image(info.resource, quality).then((source) => {
+			const roles = Object.values(readTextureInputs(material.userData) ?? {}).filter(input => input.images.includes(info.resource));
+			const paper = roles.length === 1 && roles[0]!.paperLayer ? roles[0] : undefined;
+			// Standard samplers of Paper roles use the same complete array as the final material.
+			pending = (paper ? resources.paperArray(paper.images, quality) : resources.image(info.resource, quality)).then((source) => {
 				const result = source.clone();
 				owned.add(result);
+				if (paper) result.userData.paperLayer = paper.paperLayer;
 				result.colorSpace = srgb ? SRGBColorSpace : NoColorSpace;
 
 				const sampler = info.sampler ?? {};

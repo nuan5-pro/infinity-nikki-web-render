@@ -7,6 +7,7 @@ export function createGroupPreparation(
 	renderer: WebGLRenderer,
 	context: () => { scene: Scene; camera: Camera | undefined },
 	invalidate: () => void,
+	onContextRestored?: () => void | Promise<void>,
 ) {
 	const budgetMs = 6;
 	const windowSize = 32;
@@ -14,6 +15,7 @@ export function createGroupPreparation(
 	// by CPU time and bytes instead of spending a whole frame per texture wrapper.
 	const queue = createGpuPreparation(renderer, {
 		invalidate,
+		onContextRestored,
 		maxCompiles: windowSize,
 		maxInFlight: windowSize,
 		maxUploads: Infinity,

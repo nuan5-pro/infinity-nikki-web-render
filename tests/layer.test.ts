@@ -24,7 +24,7 @@ vi.mock('../src/furniture/assetStore.js', () => ({
 			return { ready: (deferred.load?.(id) ?? Promise.resolve()).then(() => ({ config: this.configs.get(id)!, data: {
 				geometry: this.geometry, mergedMaterial: this.material, plainMaterials: [this.material],
 				boundingBox: new Box3(new Vector3(-.5, -.5, -.5), new Vector3(.5, .5, .5)),
-			} })), release: vi.fn(() => deferred.release(id)) };
+			}, releaseStaging() {} })), release: vi.fn(() => deferred.release(id)) };
 		}
 
 		dispose() {

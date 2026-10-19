@@ -13,6 +13,7 @@ export interface RenderContextOptions {
 	scene: Scene;
 	getCamera(): Camera | undefined;
 	invalidate(): void;
+	onContextRestored?(): void | Promise<void>;
 	lighting(): MaterialLighting;
 	clock?: () => number;
 	outputUniforms?: Record<string, IUniform>;
@@ -45,7 +46,7 @@ export function createRenderContext(options: RenderContextOptions) {
 			invalidate: options.invalidate, lighting: options.lighting, clock: options.clock,
 		}));
 		if (options.outputUniforms) setOutputUniforms(renderer, options.outputUniforms);
-		preparation = createGroupPreparation(renderer, () => ({ scene, camera: options.getCamera() }), options.invalidate);
+		preparation = createGroupPreparation(renderer, () => ({ scene, camera: options.getCamera() }), options.invalidate, options.onContextRestored);
 	} catch (error) {
 		for (const cleanup of cleanups.reverse()) cleanup();
 
