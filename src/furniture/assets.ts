@@ -65,6 +65,15 @@ export function buildModelAssetCacheKey(asset: FurnitureAsset): string {
 	return furnitureAssetKey(asset);
 }
 
+// Isolate the disposer from traversal closures that capture the GLTF parser.
+function createModelDisposer(geometries: Set<BufferGeometry>, placeholders: Set<Material>) {
+	return () => {
+		for (const geometry of geometries) geometry.dispose();
+
+		for (const material of placeholders) material.dispose();
+	};
+}
+
 export function createModelAssetData(result: GLTF): ModelAssetData {
 	const meshEntries: ModelMeshEntry[] = [];
 	const geometries = new Set<BufferGeometry>();
@@ -78,11 +87,7 @@ export function createModelAssetData(result: GLTF): ModelAssetData {
 			placeholders.add(material);
 	});
 
-	const dispose = () => {
-		for (const geometry of geometries) geometry.dispose();
-
-		for (const material of placeholders) material.dispose();
-	};
+	const dispose = createModelDisposer(geometries, placeholders);
 
 	try {
 		const metadata = result.parser.json.extras?.furnitureV2;

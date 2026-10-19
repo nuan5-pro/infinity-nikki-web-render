@@ -131,6 +131,11 @@ export class FurnitureAssetStore {
 			let data: GeometryData | undefined;
 			let disposed = false;
 
+			const releaseModels = () => {
+				for (const lease of modelLeases.values()) lease.release();
+				modelLeases.clear();
+			};
+
 			const dispose = () => {
 				if (disposed) return;
 
@@ -143,7 +148,7 @@ export class FurnitureAssetStore {
 
 				for (const material of owned) material.dispose();
 
-				for (const lease of modelLeases.values()) lease.release();
+				releaseModels();
 
 				disposeNNClothResources(resources);
 				disposeWaterFxResources(resources);
@@ -216,6 +221,8 @@ export class FurnitureAssetStore {
 			} catch (error) {
 				dispose();
 				throw error;
+			} finally {
+				releaseModels();
 			}
 		}));
 	}
