@@ -135,22 +135,34 @@ export class CustomDataBuffer {
 	}
 }
 
+// geometry.ts gives each triangle a single source component. Its constant value
+// can use smooth byte lanes, retaining uint32 precision while avoiding the
+// measured flat-integer varying cost on ANGLE/D3D11.
 export const paperCustomDataVertex = /* glsl */ `
-attribute float nuanSourceMesh;
+attribute highp float nuanSourceMesh;
 uniform highp usampler2D nuanCustomData;
-uniform int nuanCustomDataStride;
-flat out highp uint nuanPaperCustomData;
-uint nuanReadPaperCustomData() {
-  int word = gl_InstanceID * nuanCustomDataStride + int(nuanSourceMesh);
-  int pixel = word / 4;
-  int width = textureSize(nuanCustomData, 0).x;
-  uvec4 packed = texelFetch(nuanCustomData, ivec2(pixel % width, pixel / width), 0);
+uniform highp int nuanCustomDataStride;
+out highp vec4 nuanPaperCustomDataBytes;
+highp uint nuanPaperCustomData;
+highp vec4 nuanEncodePaperCustomData(highp uint value) {
+  return vec4(uvec4(value, value >> 8u, value >> 16u, value >> 24u) & uvec4(255u));
+}
+highp uint nuanReadPaperCustomData() {
+  highp int word = gl_InstanceID * nuanCustomDataStride + int(nuanSourceMesh);
+  highp int pixel = word / 4;
+  highp int width = textureSize(nuanCustomData, 0).x;
+  highp uvec4 packed = texelFetch(nuanCustomData, ivec2(pixel % width, pixel / width), 0);
   return packed[word % 4];
 }
 `;
 
 export const paperCustomDataFragment = /* glsl */ `
-flat in highp uint nuanPaperCustomData;
+in highp vec4 nuanPaperCustomDataBytes;
+highp uint nuanPaperCustomData;
+highp uint nuanDecodePaperCustomData(highp vec4 value) {
+  highp uvec4 bytes = uvec4(round(value));
+  return bytes.x | (bytes.y << 8u) | (bytes.z << 16u) | (bytes.w << 24u);
+}
 float nuanHBCLayer(vec2 parameters, int depth) {
   float tens = float(nuanPaperCustomData % 100u) / 10.0;
   float ones = float(nuanPaperCustomData % 10u);

@@ -86,9 +86,12 @@ export function installPaperMaterial(material: Material): void {
 		shader.uniforms.nuanCustomData = uniforms.texture;
 		shader.uniforms.nuanCustomDataStride = uniforms.stride;
 		shader.vertexShader = paperCustomDataVertex + '\n' + rawConsumers(expand(shader.vertexShader))
-			.replace(/void\s+main\s*\(\s*\)\s*\{/, '$&\nnuanPaperCustomData = nuanReadPaperCustomData();');
+			.replace(/void\s+main\s*\(\s*\)\s*\{/, `$&
+nuanPaperCustomData = nuanReadPaperCustomData();
+nuanPaperCustomDataBytes = nuanEncodePaperCustomData(nuanPaperCustomData);`);
 
-		let fragment = rawConsumers(expand(shader.fragmentShader));
+		let fragment = rawConsumers(expand(shader.fragmentShader))
+			.replace(/void\s+main\s*\(\s*\)\s*\{/, '$&\nnuanPaperCustomData = nuanDecodePaperCustomData(nuanPaperCustomDataBytes);');
 		for (const [name, uniform] of Object.entries(shader.uniforms)) {
 			// Standard uniforms are populated by Three after onBeforeCompile.
 			const value = uniform.value instanceof Texture ? uniform.value :
@@ -121,7 +124,7 @@ export function installPaperMaterial(material: Material): void {
 	};
 
 	const signature = JSON.stringify([Object.entries(inputs ?? {}).map(([role, input]) => [role, input.paperLayer]), surface?.tintDyeParams, !!surface?.homeUv, !!material.userData.foliage?.home]);
-	material.customProgramCacheKey = () => `${key}:paper-custom-data-1:${signature}`;
+	material.customProgramCacheKey = () => `${key}:paper-custom-data-2:${signature}`;
 	material.needsUpdate = true;
 }
 
