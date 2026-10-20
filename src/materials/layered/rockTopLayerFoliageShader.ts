@@ -86,6 +86,7 @@ rockBaseColor = mix(rockBaseColor, rockMaskColor[1], rockTint.g);
 rockBaseColor = mix(rockBaseColor, rockMaskColor[2], rockTint.b);
 rockBaseColor = mix(rockBaseColor, rockMaskColor[3], rockTint.a);
 
+#ifndef EDITOR_SIMPLE_LAYERS
 vec3 rockMainN = layeredRG(${sample('N', 'vLayerUv0')}, rockMainNormalIntensity, 1.0);
 vec3 rockDetailN = layeredRG(${sample('N1', 'layeredUv(rockDetailNormalUv) * rockDetailNormalTiling')}, rockDetailNormalIntensity, 1.0);
 vec3 rockInnerN = layeredRNM(rockMainN, rockDetailN);
@@ -95,6 +96,9 @@ vec3 rockSourceB = normalize(vLayerWorldBitangent);
 // Native VS evaluates the same source RNM orientation at vertices. Reusing
 // fragment samples is the declared single-pass static approximation.
 vec3 rockOrientation = normalize(rockSourceN + rockSourceT * rockInnerN.x + rockSourceB * rockInnerN.y + rockSourceN * rockInnerN.z);
+#else
+vec3 rockOrientation = normalize(vLayerWorldNormal);
+#endif
 float rockAngle = rockOrientation.z * 0.25 + 0.5;
 float rockTopWeight = mix(rockTopMask.x, rockTopMask.y, rockAngle);
 // Native edge perturbation is multiplied by 4*C.r*(1-C.r). The admitted
@@ -102,11 +106,15 @@ float rockTopWeight = mix(rockTopMask.x, rockTopMask.y, rockAngle);
 rockTopWeight *= vLayerColor.r;
 rockTopWeight = clamp(rockTopWeight * (1.0 + 2.0 * rockTopMask.z) - rockTopMask.z, 0.0, 1.0);
 vec2 rockTopUV = mix(vLayerWorldPosition.xy * 0.00125, vLayerUv0, rockTopUvSwitch) * rockTopTiling;
+#ifndef EDITOR_SIMPLE_LAYERS
 vec3 rockTopN = ${sample('N2', 'rockTopUV')}.rgb * 2.0 - 1.0;
 rockTopN = mix(rockTopN, layeredRNM(rockSourceN, rockTopN), rockTopBlendNormal);
 vec3 rockTopTangentN = vec3(dot(rockSourceT, rockTopN), dot(rockSourceB, rockTopN), dot(rockSourceN, rockTopN));
 rockTopTangentN.xy *= rockTopNormalIntensity;
 layeredNormal = normalize(mix(rockInnerN, rockTopTangentN, rockTopWeight));
+#else
+layeredNormal = vec3(0.0, 0.0, 1.0);
+#endif
 
 vec3 rockTopColor = ${sample('D2', 'rockTopUV')}.rgb * rockTopTint;
 rockTopColor = mix(rockTopColor, vec3(dot(rockTopColor, vec3(0.3, 0.59, 0.11))), rockTopDesaturation);

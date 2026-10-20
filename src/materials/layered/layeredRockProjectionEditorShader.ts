@@ -140,6 +140,7 @@ vec2 projectionPoint01 = projectionSecondaryUV * rockProjectionMaterial[4].xy - 
 vec2 projectionUV01 = vec2(dot(projectionPoint01, rockProjectionMaterial[4].zw), dot(projectionPoint01, rockProjectionMaterial[5].xy)) + vec2(0.5);
 vec2 projectionPoint03 = projectionSecondaryUV * rockProjectionMaterial[6].xy - vec2(0.5);
 vec2 projectionUV03 = vec2(dot(projectionPoint03, rockProjectionMaterial[6].zw), dot(projectionPoint03, rockProjectionMaterial[7].xy)) + vec2(0.5);
+#ifndef EDITOR_SIMPLE_LAYERS
 vec2 projectionBaseRG = ${sample('M', 'vLayerUv0')}.rg * 2.0 - 1.0;
 vec3 projectionBaseN = vec3(projectionBaseRG, sqrt(max(1.0 - dot(projectionBaseRG, projectionBaseRG), 0.0))) * rockProjectionMaterial[3].xyz;
 vec2 projectionRG01 = ${sample('N', 'projectionUV01')}.rg * 2.0 - 1.0;
@@ -158,8 +159,10 @@ vec3 projectionRNMU = projectionDetailN * vec3(-1.0, -1.0, 1.0);
 vec3 projectionDetailBlend = projectionRNMT * dot(projectionRNMT, projectionRNMU) - projectionRNMU * projectionRNMT.z;
 float projectionDetailFade = clamp((length(projectionWorld - projectionCamera) - rockProjectionMaterial[2].x) * rockProjectionMaterial[2].y, 0.0, 1.0);
 projectionInnerN = mix(projectionDetailBlend, projectionInnerN, projectionDetailFade);
+#endif
 vec2 projectionTopUV = mix(projectionWorld.xy * 0.00125, vLayerUv0, rockProjectionMaterial[11].w) * rockProjectionMaterial[12].x
   + fract(rockProjectionViewTile * 0.00125 * (1.0 - rockProjectionMaterial[11].w) * rockProjectionMaterial[12].x * 2097152.0);
+#ifndef EDITOR_SIMPLE_LAYERS
 vec3 projectionTopN = ${sample('N2', 'projectionTopUV')}.rgb * 2.0 - 1.0;
 vec3 projectionTopRNMT = projectionN + vec3(0.0, 0.0, 1.0);
 vec3 projectionTopRNMU = projectionTopN * vec3(-1.0, -1.0, 1.0);
@@ -169,13 +172,20 @@ vec3 projectionTopTangent = vec3(dot(projectionT, projectionTopN), dot(projectio
 projectionTopTangent.xy *= rockProjectionMaterial[12].z;
 vec3 projectionInnerWorldN = projectionT * projectionInnerN.x + projectionB * projectionInnerN.y + projectionN * projectionInnerN.z;
 vec3 projectionEffectiveN = normalize(mix(projectionN, projectionInnerWorldN, rockProjectionMaterial[12].w));
+#else
+vec3 projectionEffectiveN = normalize(projectionN);
+#endif
 vec3 projectionOrientation = normalize(mix(vLayerObjectOrientation, vec3(0.0, 0.0, 1.0), rockProjectionMaterial[13].x));
 float projectionAngle = ((dot(projectionEffectiveN, projectionOrientation) + projectionN.z * rockProjectionMaterial[13].y + 1.0) * 0.5 + 1.0) * 0.5;
 float projectionTopWeight = (projectionAngle * rockProjectionMaterial[13].z + rockProjectionMaterial[13].w) * vLayerColor.r;
 projectionTopWeight = clamp(projectionTopWeight * (rockProjectionMaterial[14].x - rockProjectionMaterial[14].y) + rockProjectionMaterial[14].y, 0.0, 1.0);
 vec4 projectionBaseMask = ${sample('C', 'vLayerUv0')};
 projectionTopWeight = clamp((projectionTopWeight + projectionBaseMask.g * rockProjectionMaterial[14].z) * (projectionBaseMask.a * rockProjectionMaterial[14].w), 0.0, 1.0);
+#ifndef EDITOR_SIMPLE_LAYERS
 layeredNormal = normalize(mix(projectionInnerN, projectionTopTangent, projectionTopWeight));
+#else
+layeredNormal = vec3(0.0, 0.0, 1.0);
+#endif
 vec3 projectionColor01 = ${sample('D', 'projectionUV01')}.rgb * rockProjectionMaterial[20].xyz;
 vec3 projectionColor03 = ${sample('D1', 'projectionUV03')}.rgb * rockProjectionMaterial[21].xyz;
 projectionColor01 = mix(projectionColor01, vec3(dot(projectionColor01, vec3(0.3, 0.59, 0.11))), rockProjectionMaterial[20].w);

@@ -649,6 +649,32 @@ vFoliageHighlight = instanceColor.rgb;
 #endif`,
 			);
 
+		// One source shader for all quality levels. Keep coverage and colour/dye
+		// identical; economy foliage can compile out the remaining surface details.
+		const detail = (source: string, simple = '') =>
+			`\n#ifndef EDITOR_SIMPLE_FOLIAGE\n${source}\n#else\n${simple}\n#endif\n`;
+
+		// Keep the original sampling gradients before coverage can discard a lane.
+		const samplingGradients = `
+vec2 foliageUvDx = dFdx(vFoliageUv), foliageUvDy = dFdy(vFoliageUv);
+${home?.gradient ? `
+float foliageColumns = floor(foliageGrid.x);
+vec2 foliageCell = vec2(mod(foliageRaw, foliageColumns), floor(foliageRaw / foliageColumns));
+vec2 foliageAtlasUv = foliageCell / foliageGrid + vFoliageOriginalUv / (foliageGrid * vec2(1.0, 2.0));
+vec2 foliageAtlasUvB = foliageAtlasUv + vec2(0.0, 1.0 / (2.0 * foliageGrid.y));
+vec2 foliageAtlasDx = dFdx(foliageAtlasUv), foliageAtlasDy = dFdy(foliageAtlasUv);
+vec2 foliageAtlasBDx = dFdx(foliageAtlasUvB), foliageAtlasBDy = dFdy(foliageAtlasUvB);` : ''}
+${home?.cycle ? `
+float foliageCycleIndex = mix(foliageCycleParams.y + 0.5, foliageCycleParams.w + 0.5, foliageCycleParams.z);
+vec2 foliageCycleUv = vec2(vFoliageCycleU, foliageCycleIndex / foliageCycleParams.x);
+vec2 foliageCycleDx = dFdx(foliageCycleUv), foliageCycleDy = dFdy(foliageCycleUv);` : ''}
+${home?.specularTexture && !home.specularConstant ? detail('vec2 foliageSpecularDx = dFdx(vFoliageSpecularUv), foliageSpecularDy = dFdy(vFoliageSpecularUv);') : ''}`;
+		const coverage = home
+			? home.coverage
+				? 'float foliageUcoCoverage = clamp(2.0 * (2.0 * (diffuseColor.a - 0.5) + 0.0 - 0.5), 0.0, 1.0);\nif (foliageUcoCoverage < foliageUcoCutoff) discard;'
+				: 'if (diffuseColor.a < foliageCoverageCutoff) discard;'
+			: '#include <alphatest_fragment>';
+
 		// V02's signed face interpolation and ST9's saturated sign are independent
 		// native consumers. Parameter Front/Back labels do not swap either formula.
 		const mapFragment = home
@@ -665,11 +691,8 @@ diffuseColor.rgb = clamp(foliageAlbedo, 0.0, 1.0);
 ${
 	home.gradient
 		? `
-float foliageColumns = floor(foliageGrid.x);
-vec2 foliageCell = vec2(mod(foliageRaw, foliageColumns), floor(foliageRaw / foliageColumns));
-vec2 foliageAtlasUv = foliageCell / foliageGrid + vFoliageOriginalUv / (foliageGrid * vec2(1.0, 2.0));
-vec3 foliageEndpointA = texture2D(foliageTintMap, foliageAtlasUv).rgb;
-vec3 foliageEndpointB = texture2D(foliageTintMap, foliageAtlasUv + vec2(0.0, 1.0 / (2.0 * foliageGrid.y))).rgb;
+vec3 foliageEndpointA = textureGrad(foliageTintMap, foliageAtlasUv, foliageAtlasDx, foliageAtlasDy).rgb;
+vec3 foliageEndpointB = textureGrad(foliageTintMap, foliageAtlasUvB, foliageAtlasBDx, foliageAtlasBDy).rgb;
 float foliageGradientWeight = vFoliageGradientInput > 0.0 ? min(pow(vFoliageGradientInput, foliageGradientParams.y), 1.0) : 0.0;
 foliageGradientWeight += (1.0 - 2.0 * foliageGradientWeight) * foliageGradientParams.z;
 vec3 foliagePalette = mix(foliageEndpointA, foliageEndpointB, foliageGradientWeight);
@@ -685,29 +708,29 @@ diffuseColor.rgb = clamp(mix(foliageAlbedo, foliageOverlay, foliagePacked.a), 0.
 ${
 	home.cycle
 		? `
-float foliageCycleIndex = mix(foliageCycleParams.y + 0.5, foliageCycleParams.w + 0.5, foliageCycleParams.z);
-vec3 foliageCycleColor = texture2D(foliageTintMap, vec2(vFoliageCycleU, foliageCycleIndex / foliageCycleParams.x)).rgb;
+vec3 foliageCycleColor = textureGrad(foliageTintMap, foliageCycleUv, foliageCycleDx, foliageCycleDy).rgb;
 diffuseColor.rgb = clamp(mix(foliageAlbedo, foliageAlbedo * foliageCycleColor, foliagePacked.a), 0.0, 1.0);`
 		: ''
 }
-${
+${detail(
 	home.specularTexture || home.specularConstant
 		? `
-float foliageSpecularSource = dot(${home.specularConstant ? 'foliageSpecularConstant' : 'texture2D(foliageSpecularMap, vFoliageSpecularUv).rgb'}, foliageSpecularChannel);
+float foliageSpecularSource = dot(${home.specularConstant ? 'foliageSpecularConstant' : 'textureGrad(foliageSpecularMap, vFoliageSpecularUv, foliageSpecularDx, foliageSpecularDy).rgb'}, foliageSpecularChannel);
 float foliageSpecularPower = foliageSpecularSource > 0.0 ? pow(foliageSpecularSource, foliageSpecularRange.z) : 0.0;
 foliageSpecular = clamp(foliageSpecularPower * foliageSpecularRange.w, 0.0, 1.0);`
 		: `
 float foliageSpecularMask = mix(foliageSpecularRange.x, foliageSpecularRange.y, vFoliageAlpha);
 float foliageSpecularPower = foliagePacked.b > 0.0 ? pow(foliagePacked.b, foliageSpecularRange.z) : 0.0;
-foliageSpecular = clamp(foliageSpecularMask * foliageSpecularPower * foliageSpecularRange.w, 0.0, 1.0);`
-}`
+foliageSpecular = clamp(foliageSpecularMask * foliageSpecularPower * foliageSpecularRange.w, 0.0, 1.0);`,
+	'foliageSpecular = 0.0;',
+)}`
 			: `
 vec3 foliageTint = foliageColor + (foliageColorBack - foliageColor) *
   (1.0 - foliageSign) * foliageSeparateTint;
 diffuseColor.rgb = clamp(foliageAlbedo * foliageTint * foliageGradient, 0.0, 1.0);
-float foliageSpecularMask = mix(foliageSpecularRange.x, foliageSpecularRange.y, vFoliageAlpha);
+${detail(`float foliageSpecularMask = mix(foliageSpecularRange.x, foliageSpecularRange.y, vFoliageAlpha);
 float foliageSpecularPower = foliagePacked.b > 0.0 ? pow(foliagePacked.b, foliageSpecularRange.z) : 0.0;
-foliageSpecular = clamp(foliageSpecularMask * foliageSpecularPower * foliageSpecularRange.w, 0.0, 1.0);`;
+foliageSpecular = clamp(foliageSpecularMask * foliageSpecularPower * foliageSpecularRange.w, 0.0, 1.0);`, 'foliageSpecular = 0.0;')}`;
 
 		shader.fragmentShader = shader.fragmentShader
 			.replace(
@@ -768,49 +791,52 @@ vec3 foliageAlbedo;`,
 				'#include <map_fragment>',
 				`${ShaderChunk.map_fragment.split('vMapUv').join('vFoliageUv')}
 foliageAlbedo = diffuseColor.rgb;
-foliagePacked = texture2D(foliageMaskMap, vFoliageUv);
-foliageSign = gl_FrontFacing ? 1.0 : -1.0;
-${mapFragment}`,
+${samplingGradients}`,
 			)
 			.replace(
 				'#include <alphatest_fragment>',
-				home
-					? home.coverage
-						? 'float foliageUcoCoverage = clamp(2.0 * (2.0 * (diffuseColor.a - 0.5) + 0.0 - 0.5), 0.0, 1.0);\nif (foliageUcoCoverage < foliageUcoCutoff) discard;'
-						: 'if (diffuseColor.a < foliageCoverageCutoff) discard;'
-					: '#include <alphatest_fragment>',
+				`${coverage}
+${home
+	? 'foliagePacked = textureGrad(foliageMaskMap, vFoliageUv, foliageUvDx, foliageUvDy);'
+	: detail('foliagePacked = textureGrad(foliageMaskMap, vFoliageUv, foliageUvDx, foliageUvDy);')}
+foliageSign = gl_FrontFacing ? 1.0 : -1.0;
+${mapFragment}
+diffuseColor.rgb *= vFoliageHighlight;`,
 			)
 		// Source COLOR_0 does not tint albedo or alpha. Instance colors still do.
-			.replace('#include <color_fragment>', 'diffuseColor.rgb *= vFoliageHighlight;')
+			.replace('#include <color_fragment>', '')
 			.replace(
 				'#include <roughnessmap_fragment>',
-				`float foliageFront = mix(foliageRoughnessFront.x, foliageRoughnessFront.y, foliagePacked.r);
+				detail(`float foliageFront = mix(foliageRoughnessFront.x, foliageRoughnessFront.y, foliagePacked.r);
 float foliageBack = mix(foliageRoughnessBack.x, foliageRoughnessBack.y, foliagePacked.r);
-float roughnessFactor = clamp(foliageFront + ${home ? 'clamp(foliageSign, 0.0, 1.0)' : 'foliageSign'} * (foliageBack - foliageFront), 0.0, 1.0);`,
+float roughnessFactor = clamp(foliageFront + ${home ? 'clamp(foliageSign, 0.0, 1.0)' : 'foliageSign'} * (foliageBack - foliageFront), 0.0, 1.0);`, 'float roughnessFactor = 1.0;'),
 			)
 			.replace(
 				'#include <metalnessmap_fragment>',
 				home
 					? 'float metalnessFactor = 0.0;'
-					: 'float metalnessFactor = clamp(foliagePacked.a * foliageMetallic, 0.0, 1.0);',
+					: detail('float metalnessFactor = clamp(foliagePacked.a * foliageMetallic, 0.0, 1.0);', 'float metalnessFactor = 0.0;'),
 			)
 			.replace(
 				'#include <normal_fragment_begin>',
-				ShaderChunk.normal_fragment_begin.split('vNormalMapUv').join('vFoliageUv'),
+				detail(ShaderChunk.normal_fragment_begin.split('vNormalMapUv').join('vFoliageUv'),
+					// Editor world is Z-up. A uniform canopy normal removes per-leaf
+					// shading and lets the linker discard unused vertex normal work.
+					'vec3 normal = normalize(viewMatrix[2].xyz);\nvec3 nonPerturbedNormal = normal;'),
 			)
 			.replace(
 				'#include <normal_fragment_maps>',
-				ShaderChunk.normal_fragment_maps.replace(
+				detail(ShaderChunk.normal_fragment_maps.replace(
 					'vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;',
 					`vec2 foliageNormalRG = texture2D(normalMap, vFoliageUv).rg * 2.0 - 1.0;
 ${nativeNormal ? 'foliageNormalRG.y = -foliageNormalRG.y; // Native RG -> glTF TBN after resource transfer, exactly once.' : ''}
 vec3 foliageNormal = vec3(foliageNormalRG, sqrt(max(1.0 - dot(foliageNormalRG, foliageNormalRG), 0.0)));
 vec3 mapN = mix(foliageNormal * faceDirection, vec3(0.0, 0.0, 1.0), foliageNormalFlatness);`,
-				),
+				)),
 			)
 			.replace(
 				'#include <emissivemap_fragment>',
-				home
+				detail(home
 					? `vec3 foliageEmission = foliageEmissive * foliageAlbedo;
 ${
 	home.glow
@@ -830,7 +856,7 @@ foliageEmission *= mix(1.0, foliageGlowRedMask, foliageGlowVertexMask.y);`
 }
 totalEmissiveRadiance = max(foliageEmission, vec3(0.0)) * vFoliageHighlight;`
 					: `totalEmissiveRadiance = max(foliagePacked.a * foliageEmissive *
-mix(vec3(1.0), foliageAlbedo, foliageEmissiveBaseColor), vec3(0.0)) * vFoliageHighlight;`,
+mix(vec3(1.0), foliageAlbedo, foliageEmissiveBaseColor), vec3(0.0)) * vFoliageHighlight;`, 'totalEmissiveRadiance = vec3(0.0);'),
 			)
 			.replace(
 				'#include <lights_physical_fragment>',
@@ -841,13 +867,13 @@ mix(vec3(1.0), foliageAlbedo, foliageEmissiveBaseColor), vec3(0.0)) * vFoliageHi
 			)
 			.replace(
 				'#include <aomap_fragment>',
-				ShaderChunk.aomap_fragment.replace(
+				detail(ShaderChunk.aomap_fragment.replace(
 					'texture2D( aoMap, vAoMapUv ).r',
 					'clamp(mix(foliageAoRange.x, foliageAoRange.y, vFoliageAlpha), 0.0, 1.0)',
-				),
+				)),
 			);
 	};
 	material.customProgramCacheKey = () =>
-		`furniture_${config.family}_v1_${!!normalMap}_${nativeNormal}_${!!home?.gradient}_${!!home?.cycle}_${!!home?.specularTexture}_${!!home?.specularConstant}_${!!home?.glow}_${home?.glow?.maskConstant !== undefined}_${home?.coverage?.mode ?? 'ordinary'}`;
+		`furniture_${config.family}_v2_${!!normalMap}_${nativeNormal}_${!!home?.gradient}_${!!home?.cycle}_${!!home?.specularTexture}_${!!home?.specularConstant}_${!!home?.glow}_${home?.glow?.maskConstant !== undefined}_${home?.coverage?.mode ?? 'ordinary'}`;
 	return material;
 }

@@ -2,7 +2,7 @@ import { Group, Matrix4, type Box3, type Intersection, type Raycaster } from 'th
 import type { RenderContext } from '../runtime/context.js';
 import type { AssetLease } from '../resources/leaseCache.js';
 import { createTaskQueue } from '../resources/taskQueue.js';
-import { FurnitureAssetCache, FurnitureAssetStore, type LoadedFurniture } from './assetStore.js';
+import { FurnitureAssetCache, FurnitureAssetStore, type FurnitureDisplayOptions, type LoadedFurniture } from './assetStore.js';
 import { FurnitureBatch } from './batch.js';
 import { decodeFurnitureCatalog } from './manifest.js';
 import { validatePaperCustomData, type PaperCustomData } from './customData.js';
@@ -21,7 +21,7 @@ export interface FurnitureTask {
 	onProgress?: (progress: { phase: 'loading' | 'preparing' | 'ready'; completed: number; total: number }) => void;
 }
 
-export interface FurnitureLayerOptions {
+export interface FurnitureLayerOptions extends FurnitureDisplayOptions {
 	decoderPath: string;
 }
 
@@ -57,6 +57,9 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 	if (!options.decoderPath.trim()) throw new Error('Furniture decoderPath is required');
 
 	const decoderPath = options.decoderPath.replace(/\/?$/, '/');
+	const display: FurnitureDisplayOptions = {
+		shadingQuality: options.shadingQuality ?? 'original',
+	};
 	const root = new Group();
 	root.name = 'furniture';
 	// Match the native shader and furniture assembly frame.
@@ -122,7 +125,7 @@ export function createFurnitureLayer(context: RenderContext, options: FurnitureL
 		if (!catalog) throw new Error('Call furniture.setup first');
 
 		return {
-			store: reuse?.store ?? new FurnitureAssetStore(catalog, configs, url, selection, context.renderer, cache, decoderPath),
+			store: reuse?.store ?? new FurnitureAssetStore(catalog, configs, url, selection, context.renderer, cache, decoderPath, display),
 			batches: new Map(),
 			idle: reuse?.idle ?? new Map(),
 			leases: new Map(),

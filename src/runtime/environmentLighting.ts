@@ -63,6 +63,10 @@ export function applyEnvironmentLighting<T extends Material>(material: T): T {
 			'uniform vec3 editorEnvironmentSpecularTint;\nuniform float editorEnvironmentDiffuseWeight;\n' +
 				ShaderChunk.envmap_physical_pars_fragment
 					.replace(
+						'vec3 getIBLIrradiance( const in vec3 normal ) {',
+						'$&\n\n\t\tif ( editorEnvironmentDiffuseWeight == 0.0 ) return vec3( 0.0 );',
+					)
+					.replace(
 						'return PI * envMapColor.rgb * envMapIntensity;',
 						'return PI * envMapColor.rgb * envMapIntensity * editorEnvironmentDiffuseWeight;',
 					)
@@ -72,6 +76,6 @@ export function applyEnvironmentLighting<T extends Material>(material: T): T {
 					),
 		);
 	};
-	material.customProgramCacheKey = () => `${cacheKey}_environment_lighting_${water ? 'slw' : 'general'}_v3`;
+	material.customProgramCacheKey = () => `${cacheKey}_environment_lighting_${water ? 'slw' : 'general'}_v4`;
 	return material;
 }

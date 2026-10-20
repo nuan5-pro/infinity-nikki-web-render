@@ -22,6 +22,11 @@ import { disposeWaterFxResources } from '../materials/water/waterFxAsset.js';
 import { disposeFoliageCycleAtlases } from '../materials/foliage/foliageShader.js';
 import { disposeRockProjectionCollections } from '../materials/layered/rockProjectionCollectionTexture.js';
 import type { FurnitureAssetSelection, FurnitureDB, FurnitureModelConfig } from './types.js';
+import { applyShadingQuality, type ShadingFamily, type ShadingQuality } from '../runtime/shadingQuality.js';
+
+export interface FurnitureDisplayOptions {
+	shadingQuality?: ShadingQuality;
+}
 
 export interface LoadedFurniture {
 	config: FurnitureModelConfig;
@@ -94,6 +99,7 @@ export class FurnitureAssetStore {
 	private renderer: WebGLRenderer;
 	private cache: FurnitureAssetCache;
 	private decoderPath: string;
+	private display: FurnitureDisplayOptions;
 
 	constructor(
 		catalog: FurnitureDB,
@@ -103,6 +109,7 @@ export class FurnitureAssetStore {
 		renderer: WebGLRenderer,
 		cache: FurnitureAssetCache,
 		decoderPath: string,
+		display: FurnitureDisplayOptions = {},
 	) {
 		this.catalog = catalog;
 		this.configs = configs;
@@ -111,6 +118,7 @@ export class FurnitureAssetStore {
 		this.renderer = renderer;
 		this.cache = cache;
 		this.decoderPath = decoderPath;
+		this.display = display;
 	}
 
 	acquire(id: number): AssetLease<LoadedFurniture> {
@@ -217,6 +225,14 @@ export class FurnitureAssetStore {
 				if (prepared) await this.cache.geometry.prepare([data.geometry], [null], true, signal);
 
 				applyHomeObjectLightDefault(config, data.plainMaterials, data.meshBaseNames, data.slotMeshIndices);
+				for (const material of data.plainMaterials) {
+					if (material.userData.water) continue;
+					let family: ShadingFamily | undefined;
+					if (material.userData.foliage) family = 'foliage';
+					else if (material.userData.layered) family = 'layered';
+					else if (material.userData.surface || material.userData.surfaceExtra) family = 'surface';
+					if (family) applyShadingQuality(material, this.display.shadingQuality ?? 'original', family);
+				}
 				return { config, data, releaseStaging: () => resources.releaseStaging(), dispose };
 			} catch (error) {
 				dispose();

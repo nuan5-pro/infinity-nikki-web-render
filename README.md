@@ -47,7 +47,7 @@ await furniture.setup('/assets/furniture/')
 await furniture.load([1170000315])
 ```
 
-`setup(resourceRoot)` 初始化一次，加载 schema 5 的 `manifest.json` 及其相对路径资源。`decoderPath` 是独立的 Draco 解码器目录 URL。`load(assetIds)` 可选，用于预载模型并准备 GPU 资源；就绪的空批次会保留供后续实例复用。
+`setup(resourceRoot)` 初始化一次，加载 schema 5 的 `manifest.json` 及其相对路径资源。`decoderPath` 是独立的 Draco 解码器目录 URL。`load(assetIds)` 可选，用于预载模型并准备 GPU 资源。
 
 ### 实例编辑
 
@@ -127,6 +127,33 @@ await furniture.replaceAll(instances, {
 
 进度阶段为 `'loading'`、`'preparing'` 或 `'ready'`，按操作报告。加载与 GPU 准备并行推进，前两类进度分别累计，回调可能交错；`ready` 在实例提交后报告。调用 `controller.abort()` 取消任务，调用方处理 Promise rejection。整体替换及档位切换在准备完成后提交；新的整体替换会使旧任务失效。
 
+## 着色质量
+
+```ts
+const furniture = createFurnitureLayer(context, {
+  decoderPath: '/draco/',
+  shadingQuality: 'performance',
+})
+```
+
+`shadingQuality` 接受 `ShadingQuality`：
+
+- `'original'`（默认）：原始材质效果。
+- `'performance'`：简化高光、反射和植被表面细节。
+- `'economy'`：进一步减少表面细节；植被受光更平坦，关闭植被发光。
+
+该选项固定于层的生命周期，切换时重建层。模型形状、染色和透明裁剪保持一致；未支持简化的材质保留原效果。分辨率、抗锯齿和场景光照由应用设置。
+
+应用自有材质可在首次 GPU 准备或绘制前调用：
+
+```ts
+import { applyShadingQuality } from '@nuan5-pro/render'
+
+applyShadingQuality(terrainMaterial, 'performance', 'standard')
+```
+
+`applyShadingQuality(material, quality, family)` 原地配置并返回材质。`family` 接受 `ShadingFamily`：`'standard'`、`'surface'`、`'foliage'` 或 `'layered'`，须与材质实现匹配。透明材质和 `MeshPhysicalMaterial` 保留原效果。同一材质重复应用相同质量无额外效果，改变质量需重建材质。
+
 ## 资源释放
 
 ```ts
@@ -140,4 +167,4 @@ context.dispose()
 
 `clearUnused()` 释放预载和闲置缓存；`furniture.dispose()` 释放单层；`context.dispose()` 释放所有层及内部资源。应用管理 renderer、scene 和 camera 的生命周期。
 
-家具的不可变图像与 Paper 数组在 GPU 准备完成后释放 CPU 像素。新采样器或 WebGL 上下文恢复需要上传时，从编码资源重新解码；恢复期间暂停绘制。应用可通过 `createRenderContext` 的 `onContextRestored` 回调重建自己持有的预计算渲染目标。
+WebGL 上下文恢复期间暂停绘制。应用可通过 `createRenderContext` 的 `onContextRestored` 回调重建自己持有的预计算渲染目标。

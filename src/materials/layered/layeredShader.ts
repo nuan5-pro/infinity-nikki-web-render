@@ -694,11 +694,15 @@ layeredEmission = max(emission0.rgb * emission0.a * layerEmissive[0] + emission1
 	case 'terrain-height':
 		core = `${samples}
 vec4 layerO1 = ${sample('O1', 'layerUv1')};
-vec4 edgeSample = ${sample('B', 'vLayerUv0 * layerEdge.x')};
+float vertexValue = dot(vLayerColor, layerVertexChannel);
 float blendHeight = mix(1.0 - clamp(layerO0.b, 0.0, 1.0), layerO1.b, layerBlend.x) * layerBlend.y;
 blendHeight = mix(blendHeight, 1.0 - blendHeight, layerBlend.w);
+#ifdef EDITOR_SIMPLE_LAYERS
+float edgeValue = 0.0;
+#else
+vec4 edgeSample = ${sample('B', 'vLayerUv0 * layerEdge.x')};
 float edgeValue = layeredContrast(edgeSample.r, layerEdge.y) * layerEdge.z * 0.5;
-float vertexValue = dot(vLayerColor, layerVertexChannel);
+#endif
 float layerWeight = layeredContrast(clamp(blendHeight * (1.0 + edgeValue) - 1.0 + vertexValue * 2.0, 0.0, 1.0), layerBlend.z);
 vec3 albedo0 = layeredAlbedo(layerD0.rgb, layerColor[0], layerAlbedo[0]);
 vec3 albedo1 = layeredAlbedo(layerD1.rgb, layerColor[1], layerAlbedo[1]);
@@ -714,10 +718,14 @@ layeredEmission = vec3(0.0);`;
 		break;
 	case 'rock-vertex':
 		core = `${samples}
+float vertexG = vLayerColor.g;
+#ifdef EDITOR_SIMPLE_LAYERS
+float layerWeight = clamp(vertexG, 0.0, 1.0);
+#else
 vec4 edgeSample = ${sample('B', 'vLayerUv0 * layerEdge.x')};
 float edgeValue = (layeredContrast(edgeSample.g, layerEdge.y) - 0.5) * 2.0 * layerEdge.z;
-float vertexG = vLayerColor.g;
 float layerWeight = clamp(vertexG + edgeValue * (1.0 - vertexG) * vertexG * 4.0, 0.0, 1.0);
+#endif
 vec3 baseColor = mix(layerD0.rgb * layerColor[0], layerD1.rgb * layerColor[1], layerWeight);
 vec4 macroSample = ${sample('C', config.requiredUv.includes(2) ? 'vLayerUv2 * rockMacroTiling' : 'vec2(0.0)')};
 float macroWeight = clamp(macroSample.a * rockMacroAmount, 0.0, 1.0);
@@ -753,17 +761,21 @@ vec2 projectionMaskUV = layeredRotate(vLayerUv0 * projectionMask.x, projectionMa
 vec4 projectionMaskSample = ${sample('B', 'projectionMaskUV')};
 float innerWeight = clamp(projectionMaskSample.g * (1.0 + 2.0 * projectionMask.z) - projectionMask.z, 0.0, 1.0) * projectionMask.w;
 vec4 projectionBaseMask = ${sample('C', 'vLayerUv0')};
+vec3 sourceN = normalize(vLayerWorldNormal);
+#ifndef EDITOR_SIMPLE_LAYERS
 vec3 baseN = layeredRG(${sample('M', 'vLayerUv0')}, projectionBaseNormalIntensity, 1.0);
 vec3 n0 = layeredRG(${sample('N', 'projectionUv0')}, 1.0, 1.0);
 vec3 n1 = layeredRG(${sample('N1', 'projectionUv1')}, 1.0, 1.0);
 n0 = mix(vec3(0.0, 0.0, 1.0), n0, layerNormalIntensity.x);
 n1 = mix(vec3(0.0, 0.0, 1.0), n1, layerNormalIntensity.y);
 vec3 innerN = mix(vec3(baseN.xy + n0.xy, baseN.z * n0.z), vec3(baseN.xy + n1.xy, baseN.z * n1.z), innerWeight);
-vec3 sourceN = normalize(vLayerWorldNormal);
 vec3 sourceT = normalize(vLayerWorldTangent);
 vec3 sourceB = normalize(vLayerWorldBitangent);
 vec3 innerWorldN = sourceT * innerN.x + sourceB * innerN.y + sourceN * innerN.z;
 vec3 effectiveWorldN = normalize(mix(sourceN, innerWorldN, projectionOrientation.x));
+#else
+vec3 effectiveWorldN = sourceN;
+#endif
 vec3 orientation = normalize(mix(vLayerObjectOrientation, vec3(0.0, 0.0, 1.0), projectionOrientation.y));
 float topAngle = ((dot(effectiveWorldN, orientation) + sourceN.z * projectionOrientation.z + 1.0) * 0.5 + 1.0) * 0.5;
 float topWeight = mix(projectionMaskControl.x, projectionMaskControl.y, topAngle) * vLayerColor.r;
@@ -771,11 +783,15 @@ topWeight = clamp(topWeight * (1.0 + 2.0 * projectionMaskControl.z) - projection
 topWeight = clamp((topWeight + projectionBaseMask.g * projectionMaskControl.w) * projectionBaseMask.a * projectionMoss, 0.0, 1.0);
 // Reference PS mixes native UE-world XY (1/800 cm) with UV0, then scales.
 vec2 projectionTopUV = mix(vLayerWorldPosition.xy * 0.00125, vLayerUv0, projectionTop.y) * projectionTop.x;
+#ifndef EDITOR_SIMPLE_LAYERS
 vec3 topN = ${sample('N2', 'projectionTopUV')}.rgb * 2.0 - 1.0;
 topN = mix(topN, layeredRNM(sourceN, topN), projectionTop.w);
 vec3 topTangentN = vec3(dot(sourceT, topN), dot(sourceB, topN), dot(sourceN, topN));
 topTangentN.xy *= projectionTop.z;
 layeredNormal = normalize(mix(innerN, topTangentN, topWeight));
+#else
+layeredNormal = vec3(0.0, 0.0, 1.0);
+#endif
 vec3 c0 = ${sample('D', 'projectionUv0')}.rgb * layerColor[0];
 vec3 c1 = ${sample('D1', 'projectionUv1')}.rgb * layerColor[1];
 c0 = mix(c0, vec3(dot(c0, vec3(0.3, 0.59, 0.11))), projectionDesaturation.x);
