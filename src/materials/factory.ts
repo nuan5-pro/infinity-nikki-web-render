@@ -48,6 +48,8 @@ import { createDeferredDiamondBillboardCurrentMaterial } from './effects/diamond
 import { readFurnitureAnimalMaskedCurrent } from './effects/animalMaskedCurrentShader.js';
 import { createDeferredAnimalMaskedCurrentMaterial } from './effects/animalMaskedCurrentPreview.js';
 import { createFoliageMaterial, readFurnitureFoliage } from './foliage/foliageShader.js';
+import { applyFoliageNormals } from './foliage/foliageNormals.js';
+import { applyFoliageTransmission } from './foliage/foliageTransmission.js';
 import { createEffectMaterial, readFurnitureEffect } from './effects/effectShader.js';
 import { createSceneMaterial, readFurnitureScene } from './sceneShader.js';
 import { createFoamMaterial, readFurnitureFoam } from './effects/foamShader.js';
@@ -1074,7 +1076,7 @@ function createModelMaterialFromInputs(textures: ResolvedMaterialTextures, sourc
 		break;
 	}
 
-	return mat;
+	return applyFoliageNormals(mat);
 }
 
 function copyMaterialPresentation(target: Material, source: Material): void {
@@ -1110,7 +1112,7 @@ function copyMaterialPresentation(target: Material, source: Material): void {
 	}
 }
 
-function prepareModelMaterial(material: Material): Material {
+function prepareModelMaterial(material: Material, textures?: ResolvedMaterialTextures): Material {
 	// Furniture UV transforms are authored during construction; dye edits rebuild
 	// their sampler bindings. Precompute once instead of on every material draw.
 	for (const value of Object.values(material)) {
@@ -1120,7 +1122,17 @@ function prepareModelMaterial(material: Material): Material {
 		}
 	}
 
-	return applyEnvironmentLighting(material);
+	const maskRole = material.userData.render?.foliageTransmission?.mask?.role as 'O' | 'O1' | undefined;
+	const sourceMask = maskRole ? textures?.slots[maskRole] : undefined;
+	const input = maskRole ? readTextureInputs(material.userData)?.[maskRole] : undefined;
+	const mask = sourceMask && input ? cloneTextureInput(sourceMask, input) : undefined;
+	if (mask) material.addEventListener('dispose', () => mask.dispose());
+	const albedoRole = material.userData.render?.foliageTransmission?.albedo?.role as 'D1' | undefined;
+	const sourceAlbedo = albedoRole ? textures?.slots[albedoRole] : undefined;
+	const albedoInput = albedoRole ? readTextureInputs(material.userData)?.[albedoRole] : undefined;
+	const albedo = sourceAlbedo && albedoInput ? cloneTextureInput(sourceAlbedo, albedoInput) : undefined;
+	if (albedo) material.addEventListener('dispose', () => albedo.dispose());
+	return applyEnvironmentLighting(applyFoliageTransmission(material, mask, albedo));
 }
 
 export async function buildDefaultPlainMaterial(sourceMat: Material, baseName: string | null, registry: MaterialRegistry): Promise<Material> {
@@ -1190,7 +1202,7 @@ export async function buildDefaultPlainMaterial(sourceMat: Material, baseName: s
 	if (!hasResolvedTextures(resolvedTextures) && !hasProfile) return prepareModelMaterial(sourceMat);
 
 	const resolvedMat = createModelMaterial(resolvedTextures, sourceMat);
-	return prepareModelMaterial(resolvedMat);
+	return prepareModelMaterial(resolvedMat, resolvedTextures);
 }
 
 const sourceOrigins = new WeakMap<Material, Material>();

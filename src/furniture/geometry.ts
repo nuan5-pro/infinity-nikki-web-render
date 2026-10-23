@@ -524,6 +524,12 @@ export async function processGeometryForItem(
 
 				const foliage = readFurnitureFoliage(sourceMaterial.userData.foliage);
 				if (sourceMaterial.userData.foliage && !foliage) throw new Error(`[ModelManager] ${meshPath}: invalid foliage material contract`);
+				if (sourceMaterial.userData.render?.foliageTransmission?.vertex) {
+					const red = geom.getAttribute('_foliage_red') ?? geom.getAttribute(FOLIAGE_RED_ATTRIBUTE);
+					if (!red || red.itemSize !== 1 || red.count !== geom.getAttribute('position').count || red.normalized || !(red.array instanceof Float32Array)) throw new Error(`[ModelManager] ${meshPath}: foliage transmission requires source red`);
+					geom.setAttribute(FOLIAGE_RED_ATTRIBUTE, red);
+					geom.deleteAttribute('_foliage_red');
+				}
 
 				if (foliage?.home) {
 					for (const [source, target] of [

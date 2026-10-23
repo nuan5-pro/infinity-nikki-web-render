@@ -74,7 +74,7 @@ export function installPaperMaterial(material: Material): void {
 	const surface = readFurnitureSurfaceExtra(material.userData.surfaceExtra)?.core ??
 		readFurnitureSurface(material.userData.surface);
 	if (!Object.values(inputs ?? {}).some((input) => input.paperLayer) &&
-			!surface?.homeUv && !material.userData.foliage?.home) return;
+			!surface?.homeUv && !material.userData.foliage?.home && !material.userData.editorPreview?.gradient) return;
 
 	const uniforms = { texture: { value: null }, stride: { value: 0 } };
 	owners.set(material, uniforms);

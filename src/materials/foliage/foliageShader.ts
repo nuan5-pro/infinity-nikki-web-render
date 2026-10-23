@@ -832,7 +832,11 @@ float roughnessFactor = clamp(foliageFront + ${home ? 'clamp(foliageSign, 0.0, 1
 ${nativeNormal ? 'foliageNormalRG.y = -foliageNormalRG.y; // Native RG -> glTF TBN after resource transfer, exactly once.' : ''}
 vec3 foliageNormal = vec3(foliageNormalRG, sqrt(max(1.0 - dot(foliageNormalRG, foliageNormalRG), 0.0)));
 vec3 mapN = mix(foliageNormal * faceDirection, vec3(0.0, 0.0, 1.0), foliageNormalFlatness);`,
-				)),
+				) + `
+#if !defined(USE_NORMALMAP_TANGENTSPACE) && !defined(USE_NORMALMAP_OBJECTSPACE)
+// Canopy orientation survives quality modes that disable the normal-map branch.
+normal *= faceDirection;
+#endif`),
 			)
 			.replace(
 				'#include <emissivemap_fragment>',
@@ -874,6 +878,6 @@ mix(vec3(1.0), foliageAlbedo, foliageEmissiveBaseColor), vec3(0.0)) * vFoliageHi
 			);
 	};
 	material.customProgramCacheKey = () =>
-		`furniture_${config.family}_v2_${!!normalMap}_${nativeNormal}_${!!home?.gradient}_${!!home?.cycle}_${!!home?.specularTexture}_${!!home?.specularConstant}_${!!home?.glow}_${home?.glow?.maskConstant !== undefined}_${home?.coverage?.mode ?? 'ordinary'}`;
+		`furniture_${config.family}_v3_${!!normalMap}_${nativeNormal}_${!!home?.gradient}_${!!home?.cycle}_${!!home?.specularTexture}_${!!home?.specularConstant}_${!!home?.glow}_${home?.glow?.maskConstant !== undefined}_${home?.coverage?.mode ?? 'ordinary'}`;
 	return material;
 }

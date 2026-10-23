@@ -154,6 +154,13 @@ applyShadingQuality(terrainMaterial, 'performance', 'standard')
 
 `applyShadingQuality(material, quality, family)` 原地配置并返回材质。`family` 接受 `ShadingFamily`：`'standard'`、`'surface'`、`'foliage'` 或 `'layered'`，须与材质实现匹配。透明材质和 `MeshPhysicalMaterial` 保留原效果。同一材质重复应用相同质量无额外效果，改变质量需重建材质。
 
+直接加载植被 GLB 时，按以下顺序配置，再调用 `applyEnvironmentLighting` 和 `applyShadingQuality`；家具层已自动接入：
+
+- `applyFoliageNormals(material)`：对 `userData.render.foliageNormals = 'authored'` 的双面、平滑 PBR 材质保留源法线方向。
+- `applyFoliageTransmission(material, maskTexture?, albedoTexture?)`：消费 `userData.render.foliageTransmission`（类型 `FoliageTransmission`）。按 `mask` / `albedo` 声明传入原始纹理并保留源色域，纹理由调用方释放；`vertex` 声明要求几何提供 `foliageRed` 标量属性，`cycle` 要求专用 foliage 材质的日夜图集。
+
+两者均原地返回材质，重复调用无额外效果，未声明对应元数据时保持原样。
+
 ## 资源释放
 
 ```ts

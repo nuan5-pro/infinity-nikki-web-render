@@ -10,6 +10,8 @@ import {
 import { bindPaperMaterial } from '../../src/furniture/paperMaterial.js';
 import { CustomDataBuffer } from '../../src/furniture/customData.js';
 import type { FurnitureResourceReader } from '../../src/resources/resources.js';
+import { applyShadingQuality } from '../../src/runtime/shadingQuality.js';
+import { applyFoliageTransmission } from '../../src/materials/foliage/foliageTransmission.js';
 
 function config(maskSRGB: boolean): FurnitureFoliage {
 	return {
@@ -56,6 +58,40 @@ function homeConfig(): FurnitureFoliage {
 }
 
 describe('native foliage role transfer', () => {
+	it.each(['original', 'performance', 'economy'] as const)('uses the selected raw array D before tint for transmission in %s', (quality) => {
+		const texture = new Texture();
+		const material = createFoliageMaterial(config(false), texture, texture, texture);
+		material.userData.render = { foliageTransmission: { model: 'mask-step', colorA: [.1, .2, .3], colorB: [.4, .5, .6], baseColorInfluence: 1, stepMask: 1, threshold: .5, singleSided: 0, mask: { role: 'O', uvScale: 1 } } };
+		applyFoliageTransmission(material, texture);
+		applyShadingQuality(material, quality, 'foliage');
+		const shader = { uniforms: {}, vertexShader: ShaderLib.standard.vertexShader, fragmentShader: ShaderLib.standard.fragmentShader };
+		material.onBeforeCompile(shader as never, undefined as never);
+		const fragment = shader.fragmentShader;
+		expect(fragment).toContain('texture2D( map, vFoliageUv )');
+		expect(fragment.indexOf('foliageTransmissionAlbedo=sampledDiffuseColor.rgb;')).toBeLessThan(fragment.indexOf('diffuseColor.rgb = clamp(foliageAlbedo * foliageTint'));
+		expect(fragment).toContain('textureGrad(foliageTransmissionMask,foliageSssUv,foliageSssDx,foliageSssDy)');
+		material.dispose();
+		texture.dispose();
+	});
+	it.each(['original', 'performance', 'economy'] as const)('keeps authored orientation when %s disables normal-map sampling', (quality) => {
+		for (const input of [config(false), homeConfig()]) {
+			const texture = new Texture();
+			const material = createFoliageMaterial(input, texture, texture, texture, texture, texture);
+			applyShadingQuality(material, quality, 'foliage');
+			const shader = { uniforms: {}, vertexShader: ShaderLib.standard.vertexShader, fragmentShader: ShaderLib.standard.fragmentShader };
+			material.onBeforeCompile(shader as never, undefined as never);
+			const fragment = shader.fragmentShader;
+			expect(fragment).toContain('#if !defined(USE_NORMALMAP_TANGENTSPACE) && !defined(USE_NORMALMAP_OBJECTSPACE)');
+			expect(fragment).toContain('normal *= faceDirection;\n#endif\n#else');
+			// Native mapped normals retain their existing face/flatness interpolation.
+			expect(fragment).toContain('mix(foliageNormal * faceDirection, vec3(0.0, 0.0, 1.0), foliageNormalFlatness)');
+			if (quality !== 'original') expect(fragment).toContain('#undef USE_NORMALMAP_TANGENTSPACE');
+			if (quality === 'economy') expect(fragment).toContain('#define EDITOR_SIMPLE_FOLIAGE');
+			material.dispose();
+			texture.dispose();
+		}
+	});
+
 	for (const srgb of [false, true]) {
 		it(`preserves the independently sampled mask transfer (${srgb}) without changing shared textures`, () => {
 			const diffuse = new Texture();
@@ -153,6 +189,8 @@ describe('native foliage role transfer', () => {
 		source.userData.paperLayer = 'raw';
 		const material = createFoliageMaterial(config(false), source, null, source);
 		material.userData.textureInputs = { O: { paperLayer: 'raw' } };
+		material.userData.render = { foliageTransmission: { model: 'mask-step', colorA: [1, 0, 0], colorB: [0, 1, 0], baseColorInfluence: 1, stepMask: 0, threshold: .5, singleSided: 0, mask: { role: 'O', uvScale: 1 } } };
+		applyFoliageTransmission(material, source);
 		const buffer = new CustomDataBuffer([1], 1, 64);
 		bindPaperMaterial(material, buffer);
 		const shader = {
@@ -164,6 +202,8 @@ describe('native foliage role transfer', () => {
 		try {
 			material.onBeforeCompile(shader as never, undefined as never);
 			expect(shader.fragmentShader).toContain('uniform highp sampler2DArray foliageMaskMap;');
+			expect(shader.fragmentShader).toContain('uniform highp sampler2DArray foliageTransmissionMask;');
+			expect(shader.fragmentShader).toMatch(/textureGrad\(foliageTransmissionMask, vec3\(\s*foliageSssUv, [^\n]+\),foliageSssDx,foliageSssDy\)/);
 			expect(shader.fragmentShader).toMatch(/textureGrad\(foliageMaskMap, vec3\(\s*vFoliageUv, [^\n]+\), foliageUvDx, foliageUvDy\)/);
 			expect(shader.fragmentShader.indexOf('dFdx(vFoliageUv)')).toBeLessThan(shader.fragmentShader.indexOf('if ( diffuseColor.a < alphaTest ) discard;'));
 		} finally {

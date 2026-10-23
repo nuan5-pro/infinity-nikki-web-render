@@ -185,7 +185,7 @@ describe('source-bound ordinary editor material preview', () => {
 	});
 
 	it('refuses missing coverage resources, wrong channels and native-preview mixtures', () => {
-		expect(() => createEditorMaterialPreview(fixture(), { D: new Texture() }, new MeshBasicMaterial())).toThrow('M missing');
+		expect(() => createEditorMaterialPreview(fixture(), { D: new Texture() }, new MeshBasicMaterial())).toThrow('source M requires a 2D texture or declared Paper array');
 		expect(readEditorMaterialPreview({ ...fixture(), alpha: [{ role: 'M', channel: 'xy' }] })).toBeNull();
 
 		const source = new MeshBasicMaterial();

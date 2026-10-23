@@ -1,6 +1,8 @@
 export { createRenderContext, type RenderContext, type RenderContextOptions } from './runtime/context.js';
 export type { MaterialLighting, HomeTodSample } from './runtime/lighting.js';
 export { applyEnvironmentLighting, setEnvironmentReflection, setEnvironmentDiffuseWeight } from './runtime/environmentLighting.js';
+export { applyFoliageNormals } from './materials/foliage/foliageNormals.js';
+export { applyFoliageTransmission, type FoliageTransmission } from './materials/foliage/foliageTransmission.js';
 export { applyShadingQuality, type ShadingQuality, type ShadingFamily } from './runtime/shadingQuality.js';
 export { createFurnitureLayer, type FurnitureLayer, type FurnitureLayerOptions, type FurnitureInstance, type FurnitureTask } from './furniture/layer.js';
 export { createSelectionOutline } from './helpers/selectionOutline.js';
