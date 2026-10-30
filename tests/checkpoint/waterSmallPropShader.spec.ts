@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ShaderLib, Texture } from 'three';
+import { BufferGeometry, Float32BufferAttribute, ShaderLib, Texture, type WebGLRenderer } from 'three';
+import { createMaterialClock, installMaterialClock } from '../../src/runtime/materialClock.js';
 import {
 	createWaterSmallPropMaterial,
 	readFurnitureWaterSmallProp,
@@ -49,6 +50,40 @@ function fixture(): FurnitureWaterSmallProp {
 }
 
 describe('WaterSmallProp retained native colour core', () => {
+	it('uses the shared paused material clock even when another interaction draws the scene', () => {
+		let time = 100;
+		const renderer = {} as WebGLRenderer;
+		const clock = createMaterialClock(() => time, false);
+		const release = installMaterialClock(renderer, clock);
+		const sources = { N: new Texture(), O: new Texture() };
+		const material = createWaterSmallPropMaterial(fixture(), sources);
+		const geometry = new BufferGeometry();
+		geometry.setAttribute('uv', new Float32BufferAttribute([0, 0], 2));
+		const shader = { uniforms: {}, vertexShader: ShaderLib.basic.vertexShader, fragmentShader: ShaderLib.basic.fragmentShader };
+		material.onBeforeCompile(shader as never, renderer);
+		const draw = () => material.onBeforeRender(renderer, {} as never, {} as never, geometry, {} as never, null as never);
+		try {
+			draw();
+			expect((shader.uniforms as any).wspTime.value).toBe(0);
+			time = 200;
+			draw();
+			expect((shader.uniforms as any).wspTime.value).toBe(0);
+			clock.setEnabled(true);
+			time = 202;
+			draw();
+			expect((shader.uniforms as any).wspTime.value).toBe(2);
+			clock.setEnabled(false);
+			time = 500;
+			draw();
+			expect((shader.uniforms as any).wspTime.value).toBe(2);
+		} finally {
+			release();
+			material.dispose();
+			geometry.dispose();
+			Object.values(sources).forEach(texture => texture.dispose());
+		}
+	});
+
 	it('keeps two normal reads and R-only cube in one production-tone-mapped pass', () => {
 		const config = fixture();
 		expect(readFurnitureWaterSmallProp(config)).toBe(config);

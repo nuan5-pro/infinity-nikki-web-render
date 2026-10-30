@@ -157,7 +157,6 @@ export function readFurnitureCloth(value: unknown): FurnitureCloth | null {
 		!Number.isInteger(c.maskUvChannel) ||
 		(c.maskUvChannel as number) < 0 ||
 		(c.maskUvChannel as number) > 3 ||
-		![0, 1].includes(c.twoSideSign as number) ||
 		(c.anisoScale as number[]).some((v) => v <= 0)
 	) return null;
 	if (c.normalFaceSign !== undefined && typeof c.normalFaceSign !== 'boolean') return null;

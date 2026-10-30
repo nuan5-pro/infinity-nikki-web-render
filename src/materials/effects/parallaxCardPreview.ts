@@ -19,6 +19,8 @@ import { parallaxCardBasisV2DrawProof, type ParallaxCardBasisV2Proof } from './p
 import { validateParallaxCardRuntime, type ParallaxCardRuntime } from './parallaxCardSource.js';
 import { registerMaterialFinalizer } from '../../runtime/materialPreparation.js';
 import { CURRENT_PARALLAX_CARD_ATTRIBUTES } from './parallaxCardCurrentGeometry.js';
+import { hasParallaxCardAnimation } from '../../runtime/materialAnimation.js';
+import { textureChannelVaries } from '../../runtime/textureChannels.js';
 
 interface Context {
 	renderer: WebGLRenderer;
@@ -47,7 +49,10 @@ export function notifyParallaxCardPresented(renderer: WebGLRenderer, scene: Scen
 	) return;
 
 	const profile = readFurnitureParallaxCard(material.userData.parallaxCard);
-	if (!profile || !Number.isInteger(material.userData.parallaxCardRendererFrame) || !movingCard(profile)) return;
+	if (
+		!profile || !Number.isInteger(material.userData.parallaxCardRendererFrame) ||
+		material.userData.parallaxCardAnimated === false || !hasParallaxCardAnimation(profile)
+	) return;
 
 	context.draw();
 }
@@ -57,7 +62,7 @@ export function notifyParallaxCardPresented(renderer: WebGLRenderer, scene: Scen
 export function installParallaxCardPreviewContext(
 	renderer: WebGLRenderer,
 	scene: Scene,
-	options: { invalidate: () => void; clock?: () => number; swapLightFactor?: () => number },
+	options: { invalidate: () => void; clock?: () => number; swapLightFactor?: () => number; isAnimating?: () => boolean },
 ): () => void {
 	const owner = scene as PreviewScene;
 	const prior = owner[contextKey];
@@ -73,11 +78,11 @@ export function installParallaxCardPreviewContext(
 		active: true,
 
 		draw: () => {
-			if (pending !== undefined || !context.active) return;
+			if (pending !== undefined || !context.active || options.isAnimating?.() === false) return;
 
 			pending = requestAnimationFrame(() => {
 				pending = undefined;
-				if (context.active) options.invalidate();
+				if (context.active && options.isAnimating?.() !== false) options.invalidate();
 			});
 		},
 	};
@@ -89,12 +94,6 @@ export function installParallaxCardPreviewContext(
 		pending = undefined;
 		if (owner[contextKey] === context) delete owner[contextKey];
 	};
-}
-
-function movingCard(profile: FurnitureParallaxCard): boolean {
-	if (profile.version === 3) return profile.current!.uniforms[7]![3] !== 0 || profile.current!.uniforms[8]![0] !== 0;
-
-	return profile.scalars['X Noise Speed'] !== 0 || profile.scalars['Y Noise Speed'] !== 0;
 }
 
 function rigidCamera(camera: Camera): 1 | -1 {
@@ -112,12 +111,14 @@ function rigidCamera(camera: Camera): 1 | -1 {
 }
 
 export function createDeferredParallaxCardPreviewMaterial(profile: FurnitureParallaxCard, sources: Partial<Record<string, Texture | null>>): MeshBasicMaterial {
+	const animated = hasParallaxCardAnimation(profile) && textureChannelVaries(sources.O, 0);
 	const deferred = new MeshBasicMaterial({
 		side: DoubleSide,
 		transparent: false,
 		alphaTest: 0,
 		depthWrite: true,
 	});
+	deferred.userData.parallaxCardAnimated = animated;
 	deferred.userData.parallaxCard = profile;
 
 	let current: MeshBasicMaterial | undefined;
@@ -230,7 +231,8 @@ export function createDeferredParallaxCardPreviewMaterial(profile: FurniturePara
 		updateSourceBasis();
 		current?.userData.parallaxCardRefreshUniforms();
 		deferred.userData.parallaxCardRendererFrame = renderer.info.render.frame;
-		if (!renderer.getRenderTarget() && object.visible && movingCard(profile)) context.draw();
+		deferred.userData.parallaxCardAnimated = animated;
+		if (current && animated && !renderer.getRenderTarget() && object.visible) context.draw();
 	};
 
 	deferred.customProgramCacheKey = () => 'parallax-card-awaiting-actual-draw-context';

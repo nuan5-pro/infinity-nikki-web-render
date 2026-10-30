@@ -33,6 +33,8 @@ renderer.render(scene, camera)
 
 一个 context 对应一组 renderer/scene，可共享给多个家具层。`getCamera` 和 `lighting` 返回当前相机及光照，`invalidate` 请求应用重绘。每次渲染前调用 `context.beforeRender()`。
 
+材质动画默认播放。按需静态预览可传入 `materialAnimation: false`，运行时通过 `context.setMaterialAnimation(enabled)` 暂停或继续；暂停会冻结材质时间并停止动画续帧，加载和交互重绘仍有效。
+
 静态阴影可设置 `renderer.shadowMap.autoUpdate = false`。家具实例编辑会自动标记阴影更新；应用直接修改光源、投影物、材质遮罩或层根节点的变换/可见性后，调用 `context.invalidateShadows()`。投影物有动画时，由动画更新调用此方法。
 
 ## 家具

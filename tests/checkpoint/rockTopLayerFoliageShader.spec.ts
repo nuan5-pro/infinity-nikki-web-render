@@ -96,6 +96,44 @@ function sourceConfig(): FurnitureLayered {
 }
 
 describe('captured LocalVF null-white rock projection', () => {
+	it('separates authored COLOR and null-white programs without keying runtime uniforms', () => {
+		const white = sourceConfig();
+		const authored = structuredClone(white);
+		authored.colorMask = true;
+		delete authored.colorSource;
+		const differentUniforms = structuredClone(white);
+		differentUniforms.projection!.topColor = [0.5, 0.8, 0.1];
+		const texture = new DataTexture(new Uint8Array([128, 128, 128, 255]), 1, 1);
+		const inputs = Object.fromEntries(Object.keys(white.textures).map((role) => [role, texture]));
+		const source = new MeshStandardMaterial();
+		const materials = [white, authored, differentUniforms].map(config => createLayeredMaterial(config, inputs, source));
+		try {
+			const shaders = materials.map(material => {
+				const shader = {
+					vertexShader: ShaderLib.standard.vertexShader,
+					fragmentShader: ShaderLib.standard.fragmentShader,
+					uniforms: {},
+				} as any;
+				material.onBeforeCompile(shader, {} as any);
+				return shader;
+			});
+
+			expect(materials[0]!.customProgramCacheKey()).not.toBe(materials[1]!.customProgramCacheKey());
+			expect(shaders[0].vertexShader).not.toContain('attribute vec4 ueLayerColor;');
+			expect(shaders[1].vertexShader).toContain('attribute vec4 ueLayerColor;');
+			expect(shaders[0].fragmentShader).toContain('const vec4 vLayerColor = vec4(1.0);');
+			expect(shaders[1].fragmentShader).toContain('varying vec4 vLayerColor;');
+			expect(materials[0]!.customProgramCacheKey()).toBe(materials[2]!.customProgramCacheKey());
+			expect(shaders[0].vertexShader).toBe(shaders[2].vertexShader);
+			expect(shaders[0].fragmentShader).toBe(shaders[2].fragmentShader);
+			expect(shaders[0].uniforms.projectionTopColor.value).not.toEqual(shaders[2].uniforms.projectionTopColor.value);
+		} finally {
+			materials.forEach(material => material.dispose());
+			source.dispose();
+			texture.dispose();
+		}
+	});
+
 	it('keeps the explicit null stream separate from authored COLOR and retains frame requirements', () => {
 		const config = sourceConfig();
 		expect(readFurnitureLayered(config)).not.toBeNull();

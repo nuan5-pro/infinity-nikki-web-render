@@ -392,6 +392,7 @@ cabinetRough = clamp(cabinetRough, 0.0, 1.0);`,
 			.replace(
 				'#include <normal_fragment_maps>',
 				`
+#ifdef USE_NORMALMAP_TANGENTSPACE
 cabinetNormal = cabinetDecode(texture2D(cabinetN, vCabinetUV01.xy).rg, cabinetNormalIntensity, false);
 vec2 cabinetDetailCoords = mix(vCabinetUV01.xy, vCabinetUV01.zw, cabinetDetail.x) * cabinetDetail.yz;
 vec3 cabinetDetailN = cabinetDecode(texture2D(cabinetN1, cabinetDetailCoords).rg, cabinetDetail.w, true);
@@ -406,7 +407,8 @@ cabinetNormal = mix(cabinetNormal, cabinetSecondN, cabinetSecondWeights.z);`
 		: ''
 }
 cabinetNormal.xy *= normalScale;
-normal = normalize(tbn * normalize(cabinetNormal));`,
+normal = normalize(tbn * normalize(cabinetNormal));
+#endif`,
 			)
 			.replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance = cabinetEmission;')
 			.replace(
@@ -414,6 +416,6 @@ normal = normalize(tbn * normalize(cabinetNormal));`,
 				'reflectedLight.indirectDiffuse *= clamp(cabinetAO, 0.0, 1.0);',
 			);
 	};
-	material.customProgramCacheKey = () => `cabinet-static-1:${profile.pixelShader}:${profile.requiredUV.join(',')}`;
+	material.customProgramCacheKey = () => `cabinet-static-2:${profile.pixelShader}:${profile.requiredUV.join(',')}`;
 	return material;
 }

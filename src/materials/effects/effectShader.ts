@@ -16,11 +16,13 @@ import {
 	Vector4,
 	type Texture,
 } from 'three';
+import { createBubbleNativeMaterial, readBubbleNative, type FurnitureBubbleNative } from './bubbleNativeShader.js';
 
 export const EFFECT_UV1_ATTRIBUTE = 'effectUv1';
 
 interface EffectBubble {
-	mode: 'simple' | 'edge' | 'simple-edge';
+	mode: 'simple' | 'edge' | 'simple-edge' | 'native';
+	native?: FurnitureBubbleNative;
 	color: [number, number, number];
 	edgeColor: [number, number, number];
 	smokeColor: [number, number, number];
@@ -114,6 +116,8 @@ export function readFurnitureEffect(value: unknown): FurnitureEffect | null {
 		if (!e.bubble || typeof e.bubble !== 'object' || e.base || e.glow) return null;
 
 		core = e.bubble as Record<string, unknown>;
+		if (core.mode === 'native') return readBubbleNative(core.native) ? value as FurnitureEffect : null;
+		if (core.native) return null;
 		if (core.mode !== 'simple' && core.mode !== 'edge' && core.mode !== 'simple-edge') return null;
 
 		arrays = {
@@ -235,8 +239,8 @@ export function readFurnitureEffect(value: unknown): FurnitureEffect | null {
 	return profile;
 }
 
-/** Captured static colour/coverage, not PBR. Three core samples plus active noise,
- * one transparent pass, no screen texture, cube, dissolve or runtime particle data.
+/** Captured static colour/coverage, not PBR. The native bubble adds its authored
+ * parallax, glint and HDR cube in the same transparent pass, without scene textures.
  * COLOR_0 is not colour in these source shaders and is never enabled here.
  */
 export function createEffectMaterial(
@@ -246,7 +250,13 @@ export function createEffectMaterial(
 	third: Texture | null,
 	noise1: Texture | null = null,
 	noise2: Texture | null = null,
+	nativeSources: Partial<Record<string, Texture | null>> = {},
 ): MeshBasicMaterial {
+	if (effect.bubble?.native) {
+		const material = createBubbleNativeMaterial(effect.bubble.native, { ...nativeSources, D: diffuse, O: second, T: third });
+		material.userData.effect = effect;
+		return material;
+	}
 	const sources = [diffuse, second, third];
 	const noise = effect.base?.noise;
 	if (effect.family !== 'fake-glow' && sources.some((source) => !source)) throw new Error(`Furniture ${effect.family} core requires all three captured textures`);

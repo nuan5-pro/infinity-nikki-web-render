@@ -1031,6 +1031,6 @@ totalEmissiveRadiance *= vColor;
 			);
 	};
 	material.customProgramCacheKey = () =>
-		`furniture_layered_v1_${config.mode}_${!!config.coverage}_${config.requiredUv.join('')}_${roles.map((role) => config.textures[role]?.constant?.join(',') ?? (owned[role] ? 'sample' : '')).join(';')}${worldFrame ? '_native_world_cm_parity_v3' : ''}${config.rockHome ? '_rock_home_capture_v1' : ''}${config.rock ? '_three_normal_stack_v2' : ''}`;
+		`furniture_layered_v2_${config.mode}_${!!config.coverage}_${config.requiredUv.join('')}_color-${config.colorMask ? 'attribute' : config.colorSource ?? 'none'}_${roles.map((role) => config.textures[role]?.constant?.join(',') ?? (owned[role] ? 'sample' : '')).join(';')}${worldFrame ? '_native_world_cm_parity_v3' : ''}${config.rockHome ? '_rock_home_capture_v1' : ''}${config.rock ? '_three_normal_stack_v2' : ''}`;
 	return material;
 }

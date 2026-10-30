@@ -65,9 +65,9 @@ function fixture(): FurnitureCloth {
 	};
 }
 
-for (const face of [false, true]) {
-	test(`native face ownership ${face} preserves scalar and decoder signs`, () => {
-		const cloth = { ...fixture(), normalFaceSign: face };
+for (const [face, sign] of [[false, 1], [true, 1], [true, 0.2], [true, -0.5], [true, 2]] as const) {
+	test(`native face ownership ${face} preserves scalar ${sign} and decoder signs`, () => {
+		const cloth = { ...fixture(), normalFaceSign: face, twoSideSign: sign };
 		assert.equal(readFurnitureCloth(cloth), cloth);
 
 		const source = new MeshStandardMaterial({ side: DoubleSide });
@@ -82,7 +82,7 @@ for (const face of [false, true]) {
 		} as any;
 
 		material.onBeforeCompile(shader, {} as any);
-		assert.equal(shader.uniforms.clothTwoSideSign.value, 1);
+		assert.equal(shader.uniforms.clothTwoSideSign.value, sign);
 		assert.deepEqual(material.normalScale.toArray(), [1, -1]);
 		assert.deepEqual(source.userData.clothNormalSigns, [1, -1]);
 		assert.doesNotMatch(shader.fragmentShader, /normal \*= faceDirection;/);
@@ -100,6 +100,8 @@ test('old v2 stays explicitly unproved and invalid proof rejects', () => {
 	const cloth = fixture();
 	assert.equal(readFurnitureCloth(cloth), cloth);
 	assert.equal(readFurnitureCloth({ ...cloth, normalFaceSign: 1 }), null);
+	assert.equal(readFurnitureCloth({ ...cloth, twoSideSign: NaN }), null);
+	assert.equal(readFurnitureCloth({ ...cloth, twoSideSign: Infinity }), null);
 
 	const source = new MeshStandardMaterial({ side: DoubleSide });
 	const material = createClothMaterial(cloth, null, null, null, null, source);

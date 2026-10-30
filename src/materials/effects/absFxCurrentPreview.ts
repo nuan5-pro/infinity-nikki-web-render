@@ -7,6 +7,7 @@ import {
 	type FurnitureABSFXCurrent,
 } from './absFxCurrentShader.js';
 import { registerMaterialFinalizer } from '../../runtime/materialPreparation.js';
+import { hasABSFXAnimation } from '../../runtime/materialAnimation.js';
 
 export function createDeferredABSFXCurrentMaterial(profile: FurnitureABSFXCurrent, sources: Partial<Record<string, Texture | null>>): MeshBasicMaterial {
 	const deferred = new MeshBasicMaterial({
@@ -16,6 +17,7 @@ export function createDeferredABSFXCurrentMaterial(profile: FurnitureABSFXCurren
 	});
 	deferred.forceSinglePass = true;
 	deferred.userData.absFxCurrent = profile;
+	const animated = hasABSFXAnimation(profile);
 
 	const runtime: ABSFXCurrentRuntime = {
 		gameTime: NaN,
@@ -56,7 +58,7 @@ export function createDeferredABSFXCurrentMaterial(profile: FurnitureABSFXCurren
 		runtime.nativePrimitiveDeterminantSign = sign as 1 | -1;
 		runtime.nativeFrontFaceParity = -sign as 1 | -1;
 		current?.userData.absFxCurrentRefreshUniforms();
-		if (!renderer.getRenderTarget() && object.visible) context.draw();
+		if (current && animated && !renderer.getRenderTarget() && object.visible) context.draw();
 	};
 
 	const finalize: MeshBasicMaterial['onBeforeRender'] = (...args) => {

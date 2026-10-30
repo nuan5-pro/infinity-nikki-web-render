@@ -7,6 +7,7 @@ import { installNNClothRendererContext } from '../materials/nncloth/nnclothRende
 import { installParallaxCardPreviewContext } from '../materials/effects/parallaxCardPreview.js';
 import { installCharacterJewelPreviewContext } from '../materials/jewel/characterJewelPreview.js';
 import { releaseOutputUniforms, setOutputUniforms, type MaterialLighting } from './lighting.js';
+import { createMaterialClock, installMaterialClock } from './materialClock.js';
 
 export interface RenderContextOptions {
 	renderer: WebGLRenderer;
@@ -16,6 +17,8 @@ export interface RenderContextOptions {
 	onContextRestored?(): void | Promise<void>;
 	lighting(): MaterialLighting;
 	clock?: () => number;
+	/** Defaults to playback. False starts at time zero and disables animation-driven redraws. */
+	materialAnimation?: boolean;
 	outputUniforms?: Record<string, IUniform>;
 }
 
@@ -27,6 +30,7 @@ export function createRenderContext(options: RenderContextOptions) {
 	if (owners.has(renderer)) throw new Error('Renderer already has an active render context');
 	if (scenes.has(scene)) throw new Error('Scene already belongs to an active render context');
 
+	const materialClock = createMaterialClock(options.clock, options.materialAnimation ?? true);
 	owners.add(renderer);
 	scenes.add(scene);
 
@@ -34,16 +38,19 @@ export function createRenderContext(options: RenderContextOptions) {
 	const callbacks = new Set<() => void>();
 	const disposers = new Set<() => void>();
 	const cleanups: Array<() => void> = [];
+	const isAnimating = () => materialClock.enabled;
+	const invalidateAnimation = () => { if (!disposed && isAnimating()) options.invalidate(); };
 	let preparation: ReturnType<typeof createGroupPreparation>;
 	try {
+		cleanups.push(installMaterialClock(renderer, materialClock));
 		cleanups.push(installNNClothRendererContext(renderer));
 		cleanups.push(installParallaxCardPreviewContext(renderer, scene, {
-			invalidate: options.invalidate, clock: options.clock,
+			invalidate: invalidateAnimation, clock: materialClock.read, isAnimating,
 
 			swapLightFactor: () => options.lighting().tod.swapLightFactor,
 		}));
 		cleanups.push(installCharacterJewelPreviewContext(renderer, scene, {
-			invalidate: options.invalidate, lighting: options.lighting, clock: options.clock,
+			invalidate: invalidateAnimation, lighting: options.lighting, clock: materialClock.read, isAnimating,
 		}));
 		if (options.outputUniforms) setOutputUniforms(renderer, options.outputUniforms);
 		preparation = createGroupPreparation(renderer, () => ({ scene, camera: options.getCamera() }), options.invalidate, options.onContextRestored);
@@ -82,6 +89,12 @@ export function createRenderContext(options: RenderContextOptions) {
 			return true;
 		},
 		invalidate: options.invalidate,
+		/** Pause or resume material time without advancing across the paused interval. */
+		setMaterialAnimation(enabled: boolean) {
+			if (disposed) throw new Error('Render context disposed');
+
+			if (materialClock.setEnabled(enabled)) options.invalidate();
+		},
 		invalidateShadows() {
 			renderer.shadowMap.needsUpdate = true;
 			options.invalidate();

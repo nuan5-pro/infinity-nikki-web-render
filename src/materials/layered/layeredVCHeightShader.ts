@@ -238,11 +238,13 @@ vcAOFactor=clamp(mix(mix(1.0,vcAOValue0,1.0-vcBaseAO0),mix(1.0,vcAOValue1,1.0-vc
 			)
 			.replace(
 				'#include <normal_fragment_maps>',
-				`vec3 vcN0=vcDecode(texture2D(vcN,vcCoords0).rg,vcNormal0);
+				`#ifdef USE_NORMALMAP_TANGENTSPACE
+vec3 vcN0=vcDecode(texture2D(vcN,vcCoords0).rg,vcNormal0);
 vec3 vcN1=vcDecode(texture2D(vcN1,vcCoords1).rg,vcNormal1);
 vec3 vcNativeNormal=normalize(mix(vcN0,vcN1,vcWeight));
 vcNativeNormal.xy*=normalScale;
-normal=normalize(tbn*vcNativeNormal);`,
+normal=normalize(tbn*vcNativeNormal);
+#endif`,
 			)
 			.replace(
 				'#include <lights_physical_fragment>',
@@ -251,6 +253,6 @@ normal=normalize(tbn*vcNativeNormal);`,
 			.replace('#include <aomap_fragment>', 'reflectedLight.indirectDiffuse*=vcAOFactor;')
 			.replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance=vec3(0.0);');
 	};
-	material.customProgramCacheKey = () => 'layered-vcheight-1:07385a259233546134b62ca90e44aa6ba38dbbd6';
+	material.customProgramCacheKey = () => 'layered-vcheight-2:07385a259233546134b62ca90e44aa6ba38dbbd6';
 	return material;
 }

@@ -8,6 +8,7 @@ import {
 } from './intStaticMeshCurrentShader.js';
 import { registerMaterialFinalizer } from '../../runtime/materialPreparation.js';
 import { applyEnvironmentLighting } from '../../runtime/environmentLighting.js';
+import { hasIntStaticMeshAnimation } from '../../runtime/materialAnimation.js';
 
 export function createDeferredIntStaticMeshCurrentMaterial(
 	profile: FurnitureIntStaticMeshCurrent,
@@ -15,6 +16,7 @@ export function createDeferredIntStaticMeshCurrentMaterial(
 ): MeshPhysicalMaterial {
 	const deferred = new MeshPhysicalMaterial({ side: profile.twoSided ? DoubleSide : FrontSide });
 	deferred.userData.intStaticMeshCurrent = profile;
+	const animated = hasIntStaticMeshAnimation(profile);
 
 	const runtime: IntStaticMeshCurrentRuntime = {
 		primaryDirection: [NaN, NaN, NaN],
@@ -63,7 +65,7 @@ export function createDeferredIntStaticMeshCurrentMaterial(
 		runtime.nativePrimitiveDeterminantSign = sign as 1 | -1;
 		runtime.nativeFrontFaceParity = -sign as 1 | -1;
 		current?.userData.intStaticMeshCurrentRefreshUniforms();
-		if (profile.variant === 'pattern-layer-glint' && !renderer.getRenderTarget() && object.visible)
+		if (current && animated && !renderer.getRenderTarget() && object.visible)
 			context.draw();
 	};
 

@@ -16,6 +16,7 @@ import {
 } from './characterJewelShader.js';
 import { registerMaterialFinalizer } from '../../runtime/materialPreparation.js';
 import { applyEnvironmentLighting } from '../../runtime/environmentLighting.js';
+import { hasCharacterJewelAnimation } from '../../runtime/materialAnimation.js';
 
 interface LightingView {
 	primaryDirection: [number, number, number];
@@ -45,7 +46,7 @@ export function getEditorMaterialPreviewContext(renderer: WebGLRenderer, scene: 
 export function installCharacterJewelPreviewContext(
 	renderer: WebGLRenderer,
 	scene: Scene,
-	options: { invalidate: () => void; lighting: () => LightingView; clock?: () => number },
+	options: { invalidate: () => void; lighting: () => LightingView; clock?: () => number; isAnimating?: () => boolean },
 ): () => void {
 	const owner = scene as PreviewScene;
 	if (owner[contextKey]?.active) throw new Error('[CharacterJewel] dispose prior scene provider before replacement');
@@ -59,11 +60,11 @@ export function installCharacterJewelPreviewContext(
 		active: true,
 
 		draw: () => {
-			if (pending !== undefined || !context.active) return;
+			if (pending !== undefined || !context.active || options.isAnimating?.() === false) return;
 
 			pending = requestAnimationFrame(() => {
 				pending = undefined;
-				if (context.active) options.invalidate();
+				if (context.active && options.isAnimating?.() !== false) options.invalidate();
 			});
 		},
 	};
@@ -82,6 +83,7 @@ export function createDeferredCharacterJewelPreviewMaterial(
 ): MeshPhysicalMaterial {
 	const deferred = new MeshPhysicalMaterial({ side: profile.twoSided ? DoubleSide : FrontSide });
 	deferred.userData.characterJewel = profile;
+	const animated = hasCharacterJewelAnimation(profile);
 
 	const collection = profile.collection;
 
@@ -135,7 +137,7 @@ export function createDeferredCharacterJewelPreviewMaterial(
 		runtime.viewportSize = [viewport.z, viewport.w];
 		runtime.inverseProjectionX = 1 / camera.projectionMatrix.elements[0]!;
 		current?.userData.characterJewelRefreshUniforms();
-		if (!renderer.getRenderTarget() && object.visible) context.draw();
+		if (current && animated && !renderer.getRenderTarget() && object.visible) context.draw();
 	};
 
 	const finalize: MeshPhysicalMaterial['onBeforeRender'] = (...args) => {

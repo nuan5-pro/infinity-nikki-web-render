@@ -22,6 +22,7 @@ import {
 } from './waterFx.js';
 import { type WaterFxMergedDomain } from './waterFxGeometry.js';
 import { geometryRevision, sameGeometryRevision } from '../../runtime/geometryCache.js';
+import { materialTime } from '../../runtime/materialClock.js';
 
 export interface WaterFxMaterialOptions {
 	lighting: 'editor-standard-preview' | 'source-unlit-proven';
@@ -183,9 +184,9 @@ export function createLightweightWaterFxMaterial(
 		checkedGeometry.set(geometry, revision);
 	};
 
-	material.onBeforeRender = (_renderer, _scene, camera, geometry) => {
+	material.onBeforeRender = (renderer, _scene, camera, geometry) => {
 		assertGeometry(geometry);
-		uniforms.fxTime.value = performance.now() / 1000;
+		uniforms.fxTime.value = materialTime(renderer);
 		uniforms.fxInverseView.value.copy(camera.matrixWorld);
 		uniforms.fxSceneOrthographic.value = (camera as Camera & { isOrthographicCamera?: boolean }).isOrthographicCamera === true;
 	};

@@ -118,6 +118,14 @@ import { readFurnitureWaterSmallProp } from '../materials/water/waterSmallPropSh
 import { readFurnitureWaterGlintDetail } from '../materials/water/waterGlintDetailShader.js';
 import { readFurnitureInkPreview } from '../materials/effects/inkPreviewShader.js';
 import { readFurnitureLiquidVolumeStatic } from '../materials/glass/liquidVolumeStaticShader.js';
+import {
+	readFurnitureIceStatic,
+	setStaticGlassCoordinates,
+	transformStaticGlassCoordinates,
+	STATIC_GLASS_PIVOT_ATTRIBUTE,
+	STATIC_GLASS_VERTEX_R_ATTRIBUTE,
+} from '../materials/glass/iceShader.js';
+import { readFurnitureStainedGlassStatic } from '../materials/glass/stainedGlassShader.js';
 import { readFurnitureCrystalPreview } from '../materials/glass/crystalPreviewShader.js';
 import { readFurnitureDiamondBillboardCurrent } from '../materials/effects/diamondBillboardCurrentShader.js';
 import {
@@ -223,6 +231,8 @@ function normalizeGeometryAttributes(geometries: BufferGeometry[]): void {
 				['uv1', 'uv2', 'uv3'].includes(attr) ||
 				[
 					LAYER_COLOR_ATTRIBUTE,
+					STATIC_GLASS_PIVOT_ATTRIBUTE,
+					STATIC_GLASS_VERTEX_R_ATTRIBUTE,
 					'ueLongFeatherColor',
 					FOLIAGE_RED_ATTRIBUTE,
 					FOLIAGE_GRADIENT_ATTRIBUTE,
@@ -280,6 +290,7 @@ function normalizeGeometryAttributes(geometries: BufferGeometry[]): void {
 				unionAttr === 'color' ||
 				unionAttr.startsWith('color_') ||
 				unionAttr === FOLIAGE_ALPHA_ATTRIBUTE ||
+				unionAttr === STATIC_GLASS_VERTEX_R_ATTRIBUTE ||
 				unionAttr === FOAM_MASK_ATTRIBUTE;
 			const fillValue = isColorAttr ? (ArrayType === Float32Array ? 1.0 : 255) : 0;
 			for (let index = 0; index < dataArray.length; index++) {
@@ -330,6 +341,7 @@ export function applyGeometryTransform(geometry: BufferGeometry, matrix: Matrix4
 }
 
 function transformGeometryFrame(geometry: BufferGeometry, matrix: Matrix4): void {
+	transformStaticGlassCoordinates(geometry, matrix);
 	transformJewelryMaskedGeometry(geometry, matrix);
 	transformParallaxCardGeometryProof(geometry, matrix);
 	transformParallaxCardBasisV2(geometry, matrix);
@@ -633,6 +645,14 @@ export async function processGeometryForItem(
 				if (sourceMaterial.userData.inkPreview && !inkPreview) throw new Error(`[ModelManager] ${meshPath}: invalid InkPreview contract`);
 
 				const liquid = readFurnitureLiquidVolumeStatic(sourceMaterial.userData.liquidVolumeStatic);
+				const ice = readFurnitureIceStatic(sourceMaterial.userData.iceStatic);
+				const stainedGlass = readFurnitureStainedGlassStatic(sourceMaterial.userData.stainedGlassStatic);
+				if (sourceMaterial.userData.iceStatic && !ice) throw new Error(`[ModelManager] ${meshPath}: invalid IceStatic contract`);
+				if (sourceMaterial.userData.stainedGlassStatic && !stainedGlass) throw new Error(`[ModelManager] ${meshPath}: invalid StainedGlassStatic contract`);
+
+				const staticGlass = ice ?? stainedGlass;
+				if (staticGlass) setStaticGlassCoordinates(geom, staticGlass);
+
 				if (sourceMaterial.userData.liquidVolumeStatic && !liquid) throw new Error(`[ModelManager] ${meshPath}: invalid LiquidVolumeStatic contract`);
 
 				const crystalPreview = readFurnitureCrystalPreview(sourceMaterial.userData.crystalPreview);
@@ -640,7 +660,8 @@ export async function processGeometryForItem(
 
 				const nativeUV = glintDetail
 					? [0]
-					: (liquid?.requiredUv ??
+					: (staticGlass?.requiredUV ??
+						liquid?.requiredUv ??
 						crystalPreview?.requiredUv ??
 						inkPreview?.requiredUv ??
 						ledSignPreview?.requiredUv ??

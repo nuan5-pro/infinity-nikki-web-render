@@ -18,6 +18,8 @@ import { applyHomeSurfaceFeatures } from './surface/homeSurfaceFeatures.js';
 import { applyTriplanarHbcShader } from './surface/triplanarHbcShader.js';
 import { applySurfaceExtraShader, readFurnitureSurfaceExtra } from './surface/surfaceExtraShader.js';
 import { createGlassMaterial, readFurnitureGlass } from './glass/glassShader.js';
+import { createIceStaticMaterial, readFurnitureIceStatic } from './glass/iceShader.js';
+import { createStainedGlassStaticMaterial, readFurnitureStainedGlassStatic } from './glass/stainedGlassShader.js';
 import { createJewelMaterial, readFurnitureJewel } from './jewel/jewelShader.js';
 import { readFurnitureTranslucentCrystal } from './glass/translucentCrystalShader.js';
 import { createDeferredTranslucentCrystalPreviewMaterial } from './glass/translucentCrystalPreview.js';
@@ -357,6 +359,9 @@ function createModelMaterial(textures: ResolvedMaterialTextures, source: Materia
 	// cloning every input twice through the generic textureInputs wrapper.
 	if (
 		source.userData.clothStaticCore ||
+		source.userData.iceStatic ||
+		source.userData.stainedGlassStatic ||
+		source.userData.effect?.bubble?.native ||
 		source.userData.liquidVolumeStatic ||
 		source.userData.animalMaskedCurrent ||
 		source.userData.diamondBillboardCurrent ||
@@ -514,6 +519,22 @@ function createModelMaterialFromInputs(textures: ResolvedMaterialTextures, sourc
 	}
 
 	const liquid = readFurnitureLiquidVolumeStatic(source.userData.liquidVolumeStatic);
+	const ice = readFurnitureIceStatic(source.userData.iceStatic);
+	const stainedGlass = readFurnitureStainedGlassStatic(source.userData.stainedGlassStatic);
+	if (source.userData.iceStatic && !ice) throw new Error(`[ModelManager] ${source.name}: invalid IceStatic contract`);
+	if (source.userData.stainedGlassStatic && !stainedGlass) throw new Error(`[ModelManager] ${source.name}: invalid StainedGlassStatic contract`);
+
+	if (ice || stainedGlass) {
+		const material = ice
+			? createIceStaticMaterial(ice, textures.slots)
+			: createStainedGlassStaticMaterial(stainedGlass!, textures.slots);
+		material.name = source.name;
+		material.userData = { ...source.userData, ...material.userData };
+		material.visible = source.visible;
+		material.toneMapped = source.toneMapped;
+		return material;
+	}
+
 	if (source.userData.liquidVolumeStatic && !liquid) throw new Error(`[ModelManager] ${source.name}: invalid LiquidVolumeStatic contract`);
 
 	if (liquid) {
@@ -900,6 +921,7 @@ function createModelMaterialFromInputs(textures: ResolvedMaterialTextures, sourc
 			textures.tint,
 			textures.slots.D1 ?? null,
 			textures.slots.D2 ?? null,
+			textures.slots,
 		);
 		const color = material.color.clone();
 		const opacity = material.opacity;
@@ -1152,6 +1174,8 @@ export async function buildDefaultPlainMaterial(sourceMat: Material, baseName: s
 	const hasProfile = [
 		'clothStaticCore',
 		'liquidVolumeStatic',
+		'iceStatic',
+		'stainedGlassStatic',
 		'animalMaskedCurrent',
 		'diamondBillboardCurrent',
 		'crystalPreview',

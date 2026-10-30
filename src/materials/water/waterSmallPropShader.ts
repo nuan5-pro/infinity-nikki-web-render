@@ -12,6 +12,7 @@ import {
 	type Texture,
 } from 'three';
 import { nativeWorldFrameGLSL } from '../nativeWorldFrame.js';
+import { materialTime } from '../../runtime/materialClock.js';
 
 interface WaterTexture {
 	parameter: string;
@@ -202,10 +203,10 @@ export function createWaterSmallPropMaterial(config: FurnitureWaterSmallProp, te
 	}
 
 	material.addEventListener('dispose', () => Object.values(bound).forEach((texture) => texture.dispose()));
-	material.onBeforeRender = (_renderer, _scene, _camera, geometry) => {
+	material.onBeforeRender = (renderer, _scene, _camera, geometry) => {
 		if (!geometry.getAttribute('uv')) throw new Error('WaterSmallProp missing source UV0');
 
-		time.value = performance.now() * 0.001;
+		time.value = materialTime(renderer);
 	};
 	material.onBeforeCompile = (shader) => {
 		shader.uniforms.wspNormal = { value: bound.N };

@@ -14,6 +14,7 @@ import {
 	validateCabinetStaticProfile,
 	type CabinetStaticProfile,
 } from '../../src/materials/surface/cabinetStaticShader.js';
+import { applyShadingQuality } from '../../src/runtime/shadingQuality.js';
 
 function fixture(): CabinetStaticProfile {
 	const roles = ['D', 'N', 'O', 'N1', 'D1', 'N2', 'O1', 'D2', 'B', 'T', 'T1'];
@@ -123,4 +124,35 @@ test('missing native UV and source roles fail explicitly', () => {
 	source.dispose();
 	texture.dispose();
 	geometry.dispose();
+});
+
+test('cabinet tangent-space normal consumers follow the active normal macro at every quality', () => {
+	const profile = fixture();
+	const texture = new DataTexture(new Uint8Array([128, 128, 128, 255]), 1, 1);
+	const inputs = Object.fromEntries(Object.keys(profile.textures).map(role => [role, texture]));
+	for (const flatShading of [false, true]) {
+		for (const quality of ['original', 'performance', 'economy'] as const) {
+			const source = new MeshStandardMaterial({ flatShading });
+			const material = createCabinetStaticMaterial(profile, inputs, source);
+			try {
+				applyShadingQuality(material, quality, 'surface');
+				const shader = {
+					vertexShader: ShaderLib.standard.vertexShader,
+					fragmentShader: ShaderLib.standard.fragmentShader,
+					uniforms: {},
+				} as any;
+				material.onBeforeCompile(shader, {} as any);
+				assert.match(shader.fragmentShader, /#ifdef USE_NORMALMAP_TANGENTSPACE\s+cabinetNormal = cabinetDecode[\s\S]*?normal = normalize\(tbn \* normalize\(cabinetNormal\)\);\s+#endif/);
+				assert.equal(shader.fragmentShader.includes('#undef USE_NORMALMAP_TANGENTSPACE'), quality === 'economy');
+				assert.equal(material.flatShading, flatShading);
+				assert.ok(material.normalMap);
+				assert.match(shader.fragmentShader, /cabinetSecondMG/);
+				assert.match(shader.fragmentShader, /totalEmissiveRadiance = cabinetEmission/);
+			} finally {
+				material.dispose();
+				source.dispose();
+			}
+		}
+	}
+	texture.dispose();
 });

@@ -18,6 +18,7 @@ import {
 	type BufferGeometry,
 	type Texture,
 } from 'three';
+import { materialTime } from '../../runtime/materialClock.js';
 import {
 	readWaterCaustics,
 	readWaterCommon,
@@ -390,8 +391,8 @@ diffuseColor.rgb = clamp(waterSample.rgb * diffuseColor.rgb, 0.0, 1.0)
 
 	const waterObjectCenter = { value: new Vector3() };
 	const checkedSLWGeometry = new WeakSet<BufferGeometry>();
-	material.onBeforeRender = (_renderer, _scene, _camera, geometry, _object, group) => {
-		waterTime.value = performance.now() * 0.001;
+	material.onBeforeRender = (renderer, _scene, _camera, geometry, _object, group) => {
+		waterTime.value = materialTime(renderer);
 		if (waveTBN && !checkedSLWGeometry.has(geometry)) {
 			assertWaterSLWGeometry(geometry);
 			checkedSLWGeometry.add(geometry);

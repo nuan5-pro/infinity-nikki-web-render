@@ -14,6 +14,7 @@ import {
 	updateNNClothPreviewView,
 } from './nnclothPreviewABI.js';
 import type { NNClothShaderABI } from './nnclothCompiledMaterial.js';
+import { materialTime } from '../../runtime/materialClock.js';
 
 export interface NNClothSourceCollections {
 	tod: [number, number, number, number][];
@@ -27,7 +28,7 @@ function previewFrameTime(renderer: WebGLRenderer) {
 	const saved = frameTimes.get(renderer);
 	if (saved?.frame === frame) return saved.time;
 
-	const time = performance.now() / 1000;
+	const time = materialTime(renderer);
 	frameTimes.set(renderer, { frame, time });
 	return time;
 }

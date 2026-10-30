@@ -27,6 +27,7 @@ describe('actual Parallax source domain and preview boundary', () => {
 		const material = new MeshBasicMaterial();
 		const uniforms = Array.from({ length: 11 }, () => [0, 0, 0, 0]);
 		uniforms[7]![3] = 1;
+		uniforms[8]![1] = 1;
 		material.userData.parallaxCard = {
 			version: 3,
 			family: 'parallax-card',
@@ -53,6 +54,10 @@ describe('actual Parallax source domain and preview boundary', () => {
 			notifyParallaxCardPresented(renderer, scene, material);
 			expect(request).not.toHaveBeenCalled();
 			uniforms[7]![3] = 1;
+			material.userData.parallaxCardAnimated = false;
+			notifyParallaxCardPresented(renderer, scene, material);
+			expect(request).not.toHaveBeenCalled();
+			material.userData.parallaxCardAnimated = true;
 			notifyParallaxCardPresented(renderer, scene, material);
 			expect(request).toHaveBeenCalledOnce();
 		} finally {
